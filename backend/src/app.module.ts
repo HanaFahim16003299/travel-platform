@@ -19,7 +19,7 @@ import { AuditLogsModule } from './audit-logs/audit-logs.module.js';
 import { UploadsModule } from './uploads/uploads.module.js';
 import { ReferenceDataModule } from './reference-data/reference-data.module.js';
 import { ExchangeRatesModule } from './exchange-rates/exchange-rates.module.js';
-
+import { AdminAccountsModule } from './admin/admin-accounts.module.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -34,6 +34,7 @@ import { ExchangeRatesModule } from './exchange-rates/exchange-rates.module.js';
     UsersModule,
     AdminModule,
     AirlinesModule,
+    AdminAccountsModule,
     FlightsModule,
     FlightBookingsModule,
     HotelsModule,
