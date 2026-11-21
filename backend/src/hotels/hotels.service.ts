@@ -21,17 +21,20 @@ export class HotelsService {
       name: dto.name,
       cityId: dto.cityId,
     });
-    if (duplicate) throw new ConflictException('Hotel already exists in this city');
+    if (duplicate)
+      throw new ConflictException('Hotel already exists in this city');
     return this.hotelModel.create(dto);
   }
 
   async findOne(id: string) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid id');
-    const hotel = await this.hotelModel.findOne({ _id: id, isActive: true }).lean();
+    const hotel = await this.hotelModel
+      .findOne({ _id: id, isActive: true })
+      .lean();
     if (!hotel) throw new NotFoundException('Hotel not found');
     return hotel;
   }
-    async update(id: string, dto: UpdateHotelDto) {
+  async update(id: string, dto: UpdateHotelDto) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid id');
 
     const hotel = await this.hotelModel.findOneAndUpdate(

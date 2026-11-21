@@ -8,6 +8,8 @@ import {
 } from './schemas/room-availability.schema.js';
 import { HotelsService } from './hotels.service.js';
 import { HotelsController } from './hotels.controller.js';
+import { RoomsService } from './rooms/rooms.service.js';
+import { RoomsController } from './rooms/rooms.controller.js';
 
 @Module({
   imports: [
@@ -19,7 +21,7 @@ import { HotelsController } from './hotels.controller.js';
   ],
   // lets other modules (admin, hotel-bookings) inject the Hotel/Room models
   exports: [MongooseModule],
-  providers: [HotelsService],
-  controllers: [HotelsController],
+  providers: [HotelsService, RoomsService],
+  controllers: [HotelsController, RoomsController],
 })
 export class HotelsModule {}
