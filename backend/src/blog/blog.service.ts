@@ -77,6 +77,44 @@ export class BlogService {
       ];
     }
 
+    return this.findPublishedPosts(filter, query);
+  }
+
+  // BLG-12
+  async findAuthorPage(id: string, query: ListPostsQueryDto) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid author id');
+    const authorId = new Types.ObjectId(id);
+    const author = await this.users
+      .findById(authorId)
+      .select('firstName lastName createdAt')
+      .lean<{
+        _id: Types.ObjectId;
+        firstName: string;
+        lastName: string;
+        createdAt: Date;
+      }>()
+      .exec();
+    if (!author) throw new NotFoundException('Author not found');
+
+    const posts = await this.findPublishedPosts(
+      { authorId, status: PostStatus.Published, hidden: false },
+      query,
+    );
+    return {
+      author: {
+        id: String(author._id),
+        firstName: author.firstName,
+        lastName: author.lastName,
+        joinedAt: author.createdAt,
+      },
+      posts,
+    };
+  }
+
+  private async findPublishedPosts(
+    filter: Record<string, unknown>,
+    query: ListPostsQueryDto,
+  ) {
     const skip = (query.page - 1) * query.limit;
     const [items, total] = await Promise.all([
       this.posts
