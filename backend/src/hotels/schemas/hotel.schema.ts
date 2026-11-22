@@ -1,9 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { TIME_REGEX } from '../constants/time-regex.js';
 
 export type HotelDocument = HydratedDocument<Hotel>;
-
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 @Schema({ _id: false })
 export class CancellationTier {

@@ -17,7 +17,20 @@ import {
   AvailabilityAction,
   UpdateAvailabilityDto,
 } from '../dto/update-availability.dto.js';
-import { assertNotInPast, getNightsBetween } from '../utils/date-range.util.js';
+import { assertNotInPast, getNightsBetween, toUtcMidnight } from '../utils/date-range.util.js';
+import{ QueryAvailabilityDto } from '../dto/query-availability.dto.js';
+import { buildMeta } from '../../common/utils/pagination.js';
+
+export enum NightStatus {
+  AVAILABLE = 'AVAILABLE',
+  BOOKED = 'BOOKED',
+  BLOCKED = 'BLOCKED',
+}
+ export interface NightView {
+  date: Date;
+  status: NightStatus;
+  bookingId?: Types.ObjectId;
+}
 
 @Injectable()
 export class AvailabilityService {
@@ -111,7 +124,82 @@ export class AvailabilityService {
     });
     return { requested: nights.length, modified: result.modifiedCount };
   }
+// HTL-08: status of every opened night, per room, for a date range
+  async getHotelAvailability(hotelId: string, query: QueryAvailabilityDto) {
+    if (!isValidObjectId(hotelId)) throw new BadRequestException('Invalid id');
 
+    const hotel = await this.hotelModel.exists({
+      _id: hotelId,
+      isActive: true,
+    });
+    if (!hotel) throw new NotFoundException('Hotel not found');
+
+    // validates the range; past ranges are allowed here (moderators can look back)
+    const nights = getNightsBetween(query.startDate, query.endDate);
+    const first = nights[0];
+    const end = toUtcMidnight(query.endDate); // exclusive
+
+    const { page, limit } = query;
+    const roomFilter = { hotelId: new Types.ObjectId(hotelId) };
+
+    // paginate by rooms; deactivated rooms are included on purpose
+    const [rooms, total] = await Promise.all([
+      this.roomModel
+        .find(roomFilter)
+        .sort({ name: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      this.roomModel.countDocuments(roomFilter),
+    ]);
+
+    // one query for all rooms on the page (max limit rooms x 366 nights)
+    const records = await this.availabilityModel
+      .find({
+        roomId: { $in: rooms.map((room) => room._id) },
+        date: { $gte: first, $lt: end },
+      })
+      .sort({ date: 1 })
+      .lean();
+
+    const nightsByRoom = new Map<string, NightView[]>();
+    for (const record of records) {
+      const key = record.roomId.toString();
+      const list = nightsByRoom.get(key) ?? [];
+      list.push(this.toNightView(record));
+      nightsByRoom.set(key, list);
+    }
+
+    return {
+      data: rooms.map((room) => ({
+        roomId: room._id,
+        name: room.name,
+        isActive: room.isActive,
+        nights: nightsByRoom.get(room._id.toString()) ?? [],
+      })),
+      meta: buildMeta(total, page, limit),
+    };
+  }
+
+  // BOOKED wins over BLOCKED; nights that were never opened are not returned
+  private toNightView(record: {
+    date: Date;
+    isBlocked: boolean;
+    bookingId?: Types.ObjectId | null;
+  }): NightView {
+    if (record.bookingId) {
+      // TODO: return the reservation reference once HotelBooking exists
+      return {
+        date: record.date,
+        status: NightStatus.BOOKED,
+        bookingId: record.bookingId,
+      };
+    }
+    return {
+      date: record.date,
+      status: record.isBlocked ? NightStatus.BLOCKED : NightStatus.AVAILABLE,
+    };
+  }
   // same checks as RoomsService, shared by every availability method
   private async assertActiveRoom(hotelId: string, roomId: string) {
     if (!isValidObjectId(hotelId) || !isValidObjectId(roomId))
@@ -130,4 +218,5 @@ export class AvailabilityService {
     });
     if (!room) throw new NotFoundException('Room not found');
   }
+    
 }

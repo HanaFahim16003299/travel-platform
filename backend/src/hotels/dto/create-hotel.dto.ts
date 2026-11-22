@@ -10,8 +10,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+import { TIME_REGEX } from '../constants/time-regex.js';
 
 export class CreateHotelDto {
   @ApiProperty({ example: 'Grand Berlin Hotel' })
