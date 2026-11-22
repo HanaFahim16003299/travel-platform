@@ -6,7 +6,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, isValidObjectId, Model, Types } from 'mongoose';
+import { isValidObjectId, Model, Types } from 'mongoose';
+import type { Connection } from 'mongoose';
 import type { Response } from 'express';
 import type { AuthUser } from '../auth/decorators.js';
 import { Role } from '../common/enums/index.js';
