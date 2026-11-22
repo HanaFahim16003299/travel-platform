@@ -39,8 +39,8 @@ export class HotelsController {
     return this.hotelsService.findOne(id);
   }
   @Get(':id/availability')
-  @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel)
+  @Auth(Role.HotelModerator)
   @ApiOperation({ summary: "View each room's status for a date range" })
   getAvailability(
     @Param('id') id: string,
@@ -50,16 +50,16 @@ export class HotelsController {
   }
 
   @Patch(':id')
-  @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel)
+  @Auth(Role.HotelModerator)
   @ApiOperation({ summary: 'Update a hotel by id' })
   update(@Param('id') id: string, @Body() dto: UpdateHotelDto) {
     return this.hotelsService.update(id, dto);
   }
 
   @Put(':id/policies')
-  @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel)
+  @Auth(Role.HotelModerator)
   @ApiOperation({
     summary: "Replace a hotel's check-in/out times and cancellation policy",
   })

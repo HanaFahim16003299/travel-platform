@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { TIME_REGEX } from '../constants/time-regex.js';
 
 export type HotelDocument = HydratedDocument<Hotel>;
@@ -33,7 +33,7 @@ export class Hotel {
   @Prop({ required: true })
   description: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'City', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'City', required: true })
   cityId: Types.ObjectId;
 
   @Prop({ required: true })

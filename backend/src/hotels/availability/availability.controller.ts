@@ -12,8 +12,8 @@ export class AvailabilityController {
   constructor(private readonly availabilityService: AvailabilityService) {}
 
   @Post()
-  @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel, 'hotelId')
+  @Auth(Role.HotelModerator)
   @ApiOperation({ summary: 'Open a date range of nights for a room' })
   create(
     @Param('hotelId') hotelId: string,
@@ -24,8 +24,8 @@ export class AvailabilityController {
   }
 
   @Patch()
-  @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel, 'hotelId')
+  @Auth(Role.HotelModerator)
   @ApiOperation({
     summary: 'Block, unblock or reprice a date range for a room',
   })
