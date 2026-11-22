@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { Hotel } from './hotel.schema.js';
+import { RoomType } from '../constants/room-type.js';
 
 export type RoomDocument = HydratedDocument<Room>;
 
@@ -16,13 +17,19 @@ export class Room {
   @Prop({ required: true, trim: true })
   name: string;
 
+  @Prop({ required: true, type: String, enum: Object.values(RoomType) })
+  type: RoomType;
+
+  @Prop({ required: true, min: 1 })
+  beds: number;
+
   @Prop({ required: true, min: 1 })
   maxAdults: number;
 
   @Prop({ default: 0, min: 0 })
   maxChildren: number;
 
-  @Prop({ required: true, min: 0 })
+  @Prop({ required: true, min: 0.01 })
   pricePerNight: number;
 
   @Prop({ type: [String], default: [] })

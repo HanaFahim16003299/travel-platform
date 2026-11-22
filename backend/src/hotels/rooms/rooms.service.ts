@@ -14,6 +14,9 @@ import {
 } from '../schemas/room-availability.schema.js';
 import { CreateRoomDto } from '../dto/create-room.dto.js';
 import { UpdateRoomDto } from '../dto/update-room.dto.js';
+import { QueryFreeRoomsDto } from '../dto/query-free-rooms.dto.js';
+import { AvailabilityService } from '../availability/availability.service.js';
+import { getNightsBetween } from '../utils/date-range.util.js';
 
 @Injectable()
 export class RoomsService {
@@ -22,6 +25,7 @@ export class RoomsService {
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
     @InjectModel(RoomAvailability.name)
     private readonly availabilityModel: Model<RoomAvailabilityDocument>,
+    private readonly availabilityService: AvailabilityService,
   ) {}
 
   // create a room for a specific hotel
@@ -42,6 +46,41 @@ export class RoomsService {
       }
       throw err;
     }
+  }
+
+  // HTL-15: rooms free for every night of the stay, with total stay price
+  async findAvailableRooms(hotelId: string, query: QueryFreeRoomsDto) {
+    if (!isValidObjectId(hotelId)) throw new BadRequestException('Invalid id');
+
+    const hotel = await this.hotelModel.exists({
+      _id: hotelId,
+      isActive: true,
+    });
+    if (!hotel) throw new NotFoundException('Hotel not found');
+
+    const rooms = await this.availabilityService.findFreeRooms(
+      hotelId,
+      query.startDate,
+      query.endDate,
+    );
+    const nights = getNightsBetween(query.startDate, query.endDate).length;
+
+    return {
+      startDate: query.startDate,
+      endDate: query.endDate,
+      nights,
+      data: rooms.map((room) => ({
+        roomId: room._id,
+        name: room.name,
+        type: room.type,
+        beds: room.beds,
+        maxAdults: room.maxAdults,
+        maxChildren: room.maxChildren,
+        amenities: room.amenities,
+        pricePerNight: room.pricePerNight,
+        totalPrice: (Math.round(room.pricePerNight * 100) * nights) / 100,
+      })),
+    };
   }
 
   // update a room for a specific hotel (also deactivates / reactivates it)

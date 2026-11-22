@@ -12,6 +12,8 @@ import { RoomsService } from './rooms/rooms.service.js';
 import { RoomsController } from './rooms/rooms.controller.js';
 import { AvailabilityService } from './availability/availability.service.js';
 import { AvailabilityController } from './availability/availability.controller.js';
+import { HotelSearchService } from './search/hotel-search.service.js';
+import { HotelSearchController } from './search/hotel-search.controller.js';
 
 @Module({
   imports: [
@@ -23,7 +25,19 @@ import { AvailabilityController } from './availability/availability.controller.j
   ],
   // lets other modules (admin, hotel-bookings) inject the Hotel/Room models
   exports: [MongooseModule],
-  providers: [HotelsService, RoomsService, AvailabilityService],
-  controllers: [HotelsController, RoomsController, AvailabilityController],
+  providers: [
+    HotelsService,
+    RoomsService,
+    AvailabilityService,
+    HotelSearchService,
+  ],
+  // HotelSearchController (GET /hotels/search) must be registered before
+  // HotelsController so 'search' is never captured by HotelsController's :id
+  controllers: [
+    HotelSearchController,
+    HotelsController,
+    RoomsController,
+    AvailabilityController,
+  ],
 })
 export class HotelsModule {}

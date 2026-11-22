@@ -185,6 +185,76 @@ export class AvailabilityService {
     };
   }
 
+  // HTL-11 / HTL-15: active rooms that are free for every night of the stay
+  async findFreeRooms(hotelId: string, startDate: Date, endDate: Date) {
+    if (!isValidObjectId(hotelId)) throw new BadRequestException('Invalid id');
+
+    // endDate is the check-out day, so it is not a night of the stay
+    const nights = getNightsBetween(startDate, endDate);
+    assertNotInPast(nights[0]);
+
+    const roomIds = await this.freeRoomIds(new Types.ObjectId(hotelId), nights);
+
+    // deactivated rooms are excluded from search (HTL-06)
+    return this.roomModel
+      .find({ _id: { $in: roomIds }, isActive: true })
+      .sort({ name: 1 })
+      .lean();
+  }
+
+  // HTL-11 / HTL-12: same free-room check as findFreeRooms, for many hotels at
+  // once (one aggregation, not one query per hotel), grouped by hotel id
+  async findFreeRoomsByHotel(
+    hotelIds: Types.ObjectId[],
+    startDate: Date,
+    endDate: Date,
+  ) {
+    const nights = getNightsBetween(startDate, endDate);
+    assertNotInPast(nights[0]);
+
+    const roomIds = await this.freeRoomIds({ $in: hotelIds }, nights);
+
+    // deactivated rooms are excluded from search (HTL-06); cheapest first per
+    // hotel, as summarizeFreeRooms expects
+    const rooms = await this.roomModel
+      .find({ _id: { $in: roomIds }, isActive: true })
+      .sort({ pricePerNight: 1 })
+      .lean();
+
+    const byHotel = new Map<string, (typeof rooms)[number][]>();
+    for (const room of rooms) {
+      const key = room.hotelId.toString();
+      const list = byHotel.get(key) ?? [];
+      list.push(room);
+      byHotel.set(key, list);
+    }
+    return byHotel;
+  }
+
+  // shared by findFreeRooms / findFreeRoomsByHotel: ids of rooms free for
+  // every requested night, not blocked and not reserved (aggregate() does
+  // not cast, so hotelId must already be a real Types.ObjectId)
+  private async freeRoomIds(
+    hotelId: Types.ObjectId | { $in: Types.ObjectId[] },
+    nights: Date[],
+  ): Promise<Types.ObjectId[]> {
+    const rows = await this.availabilityModel.aggregate<{
+      _id: Types.ObjectId;
+    }>([
+      {
+        $match: {
+          hotelId,
+          date: { $in: nights },
+          isBlocked: false,
+          bookingId: null,
+        },
+      },
+      { $group: { _id: '$roomId', freeNights: { $sum: 1 } } },
+      { $match: { freeNights: nights.length } },
+    ]);
+    return rows.map((row) => row._id);
+  }
+
   // BOOKED wins over BLOCKED; nights that were never opened are not returned
   private toNightView(record: {
     date: Date;
