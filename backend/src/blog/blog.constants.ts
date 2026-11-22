@@ -8,6 +8,7 @@ export const BLOG_LIMITS = {
   bodyLength: 10000,
   tagCount: 5,
   tagLength: 30,
+  commentLength: 500,
   defaultPage: 1,
   defaultPageSize: 10,
   maxPageSize: 100,
