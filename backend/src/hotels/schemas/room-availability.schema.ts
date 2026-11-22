@@ -20,9 +20,6 @@ export class RoomAvailability {
   @Prop({ default: false })
   isBlocked: boolean;
 
-  @Prop({ min: 0 })
-  priceOverride?: number;
-
   // Set by the hotel-booking module when a reservation claims this night
   @Prop({ type: Types.ObjectId, ref: 'HotelBooking', default: null })
   bookingId?: Types.ObjectId | null;

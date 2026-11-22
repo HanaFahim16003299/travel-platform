@@ -49,9 +49,6 @@ export class Hotel {
   @Prop({ default: 0, min: 0 })
   reviewCount: number;
 
-  @Prop({ required: true, uppercase: true, match: /^[A-Z]{3}$/ })
-  currency: string;
-
   @Prop({ type: [String], default: [] })
   amenities: string[];
 

@@ -35,8 +35,5 @@ export const RoomSchema = SchemaFactory.createForClass(Room);
 
 // list a hotel's active rooms
 RoomSchema.index({ hotelId: 1, isActive: 1 });
-// no duplicate names among a hotel's active rooms (soft-deleted names can be reused)
-RoomSchema.index(
-  { hotelId: 1, name: 1 },
-  { unique: true, partialFilterExpression: { isActive: true } },
-);
+// no duplicate room names within a hotel
+RoomSchema.index({ hotelId: 1, name: 1 }, { unique: true });

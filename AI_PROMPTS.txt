@@ -1,0 +1,25 @@
+//mohamed hesham prompts:
+Task: remove the `currency` field from the Hotel module in backend/src/hotels/.
+
+Why: requirement PAY-04 says the platform uses a single currency for all prices, so hotels must not carry their own currency.
+
+Do exactly this and nothing else:
+1. Search backend/src for every use of "currency" and list the hits first. Only change hits that belong to the Hotel module (schema, DTOs, service, controller, Swagger decorators, seed data, tests). Do not touch other modules' currency fields (for example the user's preferred currency).
+2. Remove `currency` from hotel.schema.ts, create-hotel.dto.ts and hotels.service.ts (anywhere it is set, read or validated).
+3. In update-hotel.dto.ts, if it only used OmitType to exclude `currency`, change it to PartialType(CreateHotelDto) and remove the unused OmitType import. Keep the existing PartialType import source.
+4. Do not edit package.json, tsconfig.json, .env or any file outside the Hotel module. Do not commit.
+5. Run `npx tsc --noEmit` from backend/ and fix only errors caused by this change.
+6. Finish by showing me the list of files changed and the tsc result.
+
+Follow the existing code style. No new abstractions, no refactoring, no comments about the change.
+
+ /superpowers:writing-skills Task: align room deactivate/delete with requirement HTL-06 in backend/src/hotels/ (rooms module). Do exactly this and nothing else.
+
+1. update-room.dto.ts: add optional `isActive` (boolean, @IsOptional @IsBoolean, with the same Swagger decorator style as the other fields).
+2. rooms.service.ts, updateRoom: when dto.isActive === false and the room is currently active, throw ConflictException (409) if any RoomAvailability document exists for that room with date >= today at UTC midnight and bookingId not null. Setting isActive to true is always allowed. Reuse the existing "today at UTC midnight" logic from the current delete method instead of writing a new one.
+3. rooms.service.ts, delete method: change from soft delete to hard delete. Throw ConflictException (409) if ANY RoomAvailability document for that room (any date) has bookingId not null, with a message telling the moderator to deactivate the room instead. Otherwise delete all RoomAvailability documents of that room, then delete the room. Keep the existing hotel/room ownership checks and the 404 behaviour.
+4. room.schema.ts: replace the partial unique index on { hotelId, name } with a plain unique index on { hotelId, name } (no partialFilterExpression). Keep the existing duplicate-name 409 handling working. Remove any now-unused code.
+5. Do not edit package.json, tsconfig.json, .env or files outside the hotels module. Do not commit. Do not touch the database.
+6. Run `npx tsc --noEmit` from backend/ and show me the changed files and the result.
+
+Follow the existing code style. No new abstractions.

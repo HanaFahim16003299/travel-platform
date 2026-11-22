@@ -23,7 +23,8 @@ export class RoomsService {
     @InjectModel(RoomAvailability.name)
     private readonly availabilityModel: Model<RoomAvailabilityDocument>,
   ) {}
-  //create a room for a specific hotel
+
+  // create a room for a specific hotel
   async createRoom(hotelId: string, dto: CreateRoomDto) {
     if (!isValidObjectId(hotelId)) throw new BadRequestException('Invalid id');
 
@@ -42,8 +43,8 @@ export class RoomsService {
       throw err;
     }
   }
-  //update a room for a specific hotel
-  // update a room for a specific hotel
+
+  // update a room for a specific hotel (also deactivates / reactivates it)
   async updateRoom(hotelId: string, roomId: string, dto: UpdateRoomDto) {
     if (!isValidObjectId(hotelId) || !isValidObjectId(roomId))
       throw new BadRequestException('Invalid id');
@@ -54,10 +55,34 @@ export class RoomsService {
     });
     if (!hotel) throw new NotFoundException('Hotel not found');
 
+    // HTL-06: deactivation is refused if the room has upcoming reservations
+    if (dto.isActive === false) {
+      const activeRoom = await this.roomModel.exists({
+        _id: roomId,
+        hotelId,
+        isActive: true,
+      });
+      if (activeRoom) {
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0); // normalize to UTC midnight
+        const upcoming = await this.availabilityModel.exists({
+          roomId,
+          bookingId: { $ne: null },
+          date: { $gte: today },
+        });
+        if (upcoming) {
+          throw new ConflictException(
+            'Cannot deactivate room with upcoming bookings',
+          );
+        }
+      }
+    }
+
     let room: RoomDocument | null;
     try {
+      // no isActive filter: an inactive room must stay editable and reactivatable
       room = await this.roomModel.findOneAndUpdate(
-        { _id: roomId, hotelId, isActive: true },
+        { _id: roomId, hotelId },
         { $set: dto },
         { new: true, runValidators: true },
       );
@@ -71,7 +96,8 @@ export class RoomsService {
     if (!room) throw new NotFoundException('Room not found');
     return room;
   }
-  //delete a room for a specific hotel
+
+  // delete a room for a specific hotel (only if it was never reserved)
   async deleteRoom(hotelId: string, roomId: string) {
     if (!isValidObjectId(hotelId) || !isValidObjectId(roomId))
       throw new BadRequestException('Invalid id');
@@ -81,27 +107,24 @@ export class RoomsService {
       isActive: true,
     });
     if (!hotel) throw new NotFoundException('Hotel not found');
-    const room = await this.roomModel.findOne({
-      _id: roomId,
-      hotelId,
-      isActive: true,
-    });
+
+    // no isActive filter: a deactivated room can still be deleted
+    const room = await this.roomModel.findOne({ _id: roomId, hotelId });
     if (!room) throw new NotFoundException('Room not found');
 
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0); // Normalize to UTC midnight
-    const upcoming = await this.availabilityModel.exists({
+    // HTL-06: any booking, past or future, blocks deletion
+    const booked = await this.availabilityModel.exists({
       roomId: room._id,
       bookingId: { $ne: null },
-      date: { $gte: today },
     });
-
-    if (upcoming) {
-      throw new ConflictException('Cannot delete room with upcoming bookings');
+    if (booked) {
+      throw new ConflictException(
+        'Room has bookings; deactivate it instead of deleting',
+      );
     }
 
-    room.isActive = false;
-    await room.save();
+    await this.availabilityModel.deleteMany({ roomId: room._id });
+    await room.deleteOne();
     return { message: 'Room deleted successfully' };
   }
 }
