@@ -26,7 +26,9 @@ export class AvailabilityController {
   @Patch()
   @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel, 'hotelId')
-  @ApiOperation({ summary: 'Block, unblock or reprice a date range for a room' })
+  @ApiOperation({
+    summary: 'Block, unblock or reprice a date range for a room',
+  })
   update(
     @Param('hotelId') hotelId: string,
     @Param('roomId') roomId: string,

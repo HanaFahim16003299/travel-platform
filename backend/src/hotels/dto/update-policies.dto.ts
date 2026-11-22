@@ -1,6 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, Matches, ValidateNested } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  Matches,
+  ValidateNested,
+} from 'class-validator';
 import { TIME_REGEX } from '../constants/time-regex.js';
 import { CancellationTierDto } from './cancellation-tier.dto.js';
 

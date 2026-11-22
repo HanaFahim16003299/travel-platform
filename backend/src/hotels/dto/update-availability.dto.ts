@@ -16,7 +16,8 @@ export class UpdateAvailabilityDto {
 
   @ApiProperty({
     example: '2026-12-10',
-    description: 'Exclusive: the last night affected is the night before this date.',
+    description:
+      'Exclusive: the last night affected is the night before this date.',
   })
   @Type(() => Date)
   @IsDate()

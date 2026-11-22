@@ -17,8 +17,12 @@ import {
   AvailabilityAction,
   UpdateAvailabilityDto,
 } from '../dto/update-availability.dto.js';
-import { assertNotInPast, getNightsBetween, toUtcMidnight } from '../utils/date-range.util.js';
-import{ QueryAvailabilityDto } from '../dto/query-availability.dto.js';
+import {
+  assertNotInPast,
+  getNightsBetween,
+  toUtcMidnight,
+} from '../utils/date-range.util.js';
+import { QueryAvailabilityDto } from '../dto/query-availability.dto.js';
 import { buildMeta } from '../../common/utils/pagination.js';
 
 export enum NightStatus {
@@ -26,7 +30,7 @@ export enum NightStatus {
   BOOKED = 'BOOKED',
   BLOCKED = 'BLOCKED',
 }
- export interface NightView {
+export interface NightView {
   date: Date;
   status: NightStatus;
   bookingId?: Types.ObjectId;
@@ -124,7 +128,7 @@ export class AvailabilityService {
     });
     return { requested: nights.length, modified: result.modifiedCount };
   }
-// HTL-08: status of every opened night, per room, for a date range
+  // HTL-08: status of every opened night, per room, for a date range
   async getHotelAvailability(hotelId: string, query: QueryAvailabilityDto) {
     if (!isValidObjectId(hotelId)) throw new BadRequestException('Invalid id');
 
@@ -218,5 +222,4 @@ export class AvailabilityService {
     });
     if (!room) throw new NotFoundException('Room not found');
   }
-    
 }

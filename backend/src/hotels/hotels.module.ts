@@ -13,7 +13,6 @@ import { RoomsController } from './rooms/rooms.controller.js';
 import { AvailabilityService } from './availability/availability.service.js';
 import { AvailabilityController } from './availability/availability.controller.js';
 
-
 @Module({
   imports: [
     MongooseModule.forFeature([

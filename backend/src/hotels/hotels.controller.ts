@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Auth, ProviderScope } from '../auth/decorators.js';
 import { ProviderType, Role } from '../common/enums/index.js';
@@ -6,14 +15,15 @@ import { HotelsService } from './hotels.service.js';
 import { CreateHotelDto } from './dto/create-hotel.dto.js';
 import { UpdateHotelDto } from './dto/update-hotel.dto.js';
 import { UpdatePoliciesDto } from './dto/update-policies.dto.js';
-import{AvailabilityService}from'./availability/availability.service.js';
-import{QueryAvailabilityDto}from'./dto/query-availability.dto.js';
+import { AvailabilityService } from './availability/availability.service.js';
+import { QueryAvailabilityDto } from './dto/query-availability.dto.js';
 
 @ApiTags('Hotels')
 @Controller('hotels')
 export class HotelsController {
-  constructor(private readonly hotelsService: HotelsService,
-  private readonly availabilityService: AvailabilityService,
+  constructor(
+    private readonly hotelsService: HotelsService,
+    private readonly availabilityService: AvailabilityService,
   ) {}
 
   @Post()
@@ -28,7 +38,7 @@ export class HotelsController {
   findOne(@Param('id') id: string) {
     return this.hotelsService.findOne(id);
   }
-   @Get(':id/availability')
+  @Get(':id/availability')
   @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel)
   @ApiOperation({ summary: "View each room's status for a date range" })
@@ -50,7 +60,9 @@ export class HotelsController {
   @Put(':id/policies')
   @Auth(Role.HotelModerator)
   @ProviderScope(ProviderType.Hotel)
-  @ApiOperation({ summary: "Replace a hotel's check-in/out times and cancellation policy" })
+  @ApiOperation({
+    summary: "Replace a hotel's check-in/out times and cancellation policy",
+  })
   updatePolicies(@Param('id') id: string, @Body() dto: UpdatePoliciesDto) {
     return this.hotelsService.updatePolicies(id, dto);
   }
