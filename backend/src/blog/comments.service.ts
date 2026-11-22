@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, isValidObjectId } from 'mongoose';
+import type { AuthUser } from '../auth/decorators.js';
+import { Role } from '../common/enums/index.js';
 import { User } from '../users/schemas/user.schema.js';
 import { Post, PostDocument } from './schemas/post.schema.js';
 import { Comment, CommentDocument } from './schemas/comment.schema.js';
@@ -86,6 +88,37 @@ export class CommentsService {
       };
     });
     return { items, ...paginationMeta(total, query.page, query.limit) };
+  }
+
+  // GEN-10
+  async findOne(id: string, viewer?: AuthUser) {
+    const commentId = this.validateId(id, 'comment');
+    const comment = await this.comments.findById(commentId).lean().exec();
+    if (!comment) throw new NotFoundException('Comment not found');
+
+    const post = await this.posts
+      .findById(comment.postId)
+      .select('authorId status hidden')
+      .lean()
+      .exec();
+    const isPublic =
+      !comment.hidden &&
+      post?.status === PostStatus.Published &&
+      post.hidden === false;
+    const isCommentAuthor = viewer?.id === String(comment.authorId);
+    const isAdmin = viewer?.role === Role.Admin;
+    if (!isPublic && !isCommentAuthor && !isAdmin)
+      throw new NotFoundException('Comment not found');
+
+    return {
+      _id: comment._id,
+      postId: comment.postId,
+      authorId: comment.authorId,
+      content: comment.content,
+      hidden: comment.hidden,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+    };
   }
 
   // BLG-07

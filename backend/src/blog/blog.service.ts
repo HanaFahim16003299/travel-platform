@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, isValidObjectId } from 'mongoose';
+import { Role } from '../common/enums/index.js';
+import type { AuthUser } from '../auth/decorators.js';
 import { User } from '../users/schemas/user.schema.js';
 import { BLOG_LIMITS, DEFAULT_POST_STATUS, PostStatus } from './blog.constants.js';
 import { CreatePostDto } from './dto/create-post.dto.js';
@@ -172,7 +174,7 @@ export class BlogService {
     const [items, total] = await Promise.all([
       this.posts
         .find(filter)
-        .select('title status createdAt likeCount commentCount')
+        .select('title status hidden createdAt likeCount commentCount')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(query.limit)
@@ -184,13 +186,17 @@ export class BlogService {
   }
 
   // BLG-02
-  async findOne(id: string) {
+  async findOne(id: string, viewer?: AuthUser) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid post id');
     const post = await this.posts
-      .findOne({ _id: id, status: PostStatus.Published, hidden: false })
+      .findById(id)
       .lean()
       .exec();
     if (!post) throw new NotFoundException('Post not found');
+    const isPublic = post.status === PostStatus.Published && !post.hidden;
+    const isOwner = viewer?.id === String(post.authorId);
+    const isAdmin = viewer?.role === Role.Admin;
+    if (!isPublic && !isOwner && !isAdmin) throw new NotFoundException('Post not found');
 
     const author = await this.users
       .findById(post.authorId)
@@ -205,6 +211,7 @@ export class BlogService {
       images: post.images,
       authorId: post.authorId,
       status: post.status,
+      hidden: post.hidden,
       likeCount: post.likeCount,
       commentCount: post.commentCount,
       createdAt: post.createdAt,
