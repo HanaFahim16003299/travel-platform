@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, isValidObjectId } from 'mongoose';
-import { AuditLogService, NotificationService } from '../admin/temp-shared-services.js';
+import { Role } from '../common/enums/index.js';
+import { BlogIntegrations } from './blog-integrations.js';
 import {
   PostStatus,
   ReportAction,
@@ -42,8 +43,7 @@ export class ReportsService {
     @InjectModel(Post.name) private readonly posts: Model<PostDocument>,
     @InjectModel(Comment.name) private readonly comments: Model<CommentDocument>,
     @InjectModel(Like.name) private readonly likes: Model<LikeDocument>,
-    private readonly audit: AuditLogService,
-    private readonly notifications: NotificationService,
+    private readonly integrations: BlogIntegrations,
   ) {}
 
   // GEN-09
@@ -147,16 +147,25 @@ export class ReportsService {
       throw new ConflictException('This report has already been reviewed');
 
     const action = this.auditAction(dto.action);
-    await this.audit.log({
+    await this.integrations.logAudit({
       actorId: adminId,
+      actorRole: Role.Admin,
       action,
       targetType: report.targetType,
       targetId: String(report.targetId),
-      timestamp: reviewedAt,
-      details: { reportId: String(report._id), adminNote: dto.adminNote },
+      metadata: {
+        timestamp: reviewedAt,
+        reportId: String(report._id),
+        adminNote: dto.adminNote,
+      },
     });
     if (authorId && dto.action !== ReportAction.Dismiss)
-      await this.notifyAuthor(authorId, dto.action, report.targetType);
+      await this.notifyAuthor(
+        authorId,
+        dto.action,
+        report.targetType,
+        String(report.targetId),
+      );
 
     return reviewed;
   }
@@ -166,15 +175,15 @@ export class ReportsService {
     const targetId = this.validateId(id, 'content');
     const authorId = await this.deleteTarget(targetType, targetId);
     const timestamp = new Date();
-    await this.audit.log({
+    await this.integrations.logAudit({
       actorId: adminId,
+      actorRole: Role.Admin,
       action: 'CONTENT_DELETED',
       targetType,
       targetId: String(targetId),
-      timestamp,
-      details: { source: 'direct_admin_action' },
+      metadata: { timestamp, source: 'direct_admin_action' },
     });
-    await this.notifyAuthor(authorId, ReportAction.Delete, targetType);
+    await this.notifyAuthor(authorId, ReportAction.Delete, targetType, String(targetId));
     return { message: 'Content deleted' };
   }
 
@@ -287,12 +296,16 @@ export class ReportsService {
     authorId: string,
     action: ReportAction,
     targetType: ReportTargetType,
+    targetId: string,
   ) {
     const hidden = action === ReportAction.Hide;
-    await this.notifications.create({
+    await this.integrations.notifyAuthor({
       userId: authorId,
       type: hidden ? 'CONTENT_HIDDEN' : 'CONTENT_DELETED',
+      title: hidden ? 'Content hidden' : 'Content deleted',
       message: `Your ${targetType} was ${hidden ? 'hidden' : 'deleted'} by an administrator.`,
+      referenceType: targetType,
+      referenceId: targetId,
     });
   }
 

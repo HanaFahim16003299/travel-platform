@@ -10,6 +10,7 @@ import { CommentsService } from './comments.service.js';
 import { LikesController } from './likes.controller.js';
 import { LikesService } from './likes.service.js';
 import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard.js';
+import { BlogIntegrations } from './blog-integrations.js';
 import { ReportsController } from './reports.controller.js';
 import { ReportsService } from './reports.service.js';
 import { TagsController } from './tags.controller.js';
@@ -41,6 +42,7 @@ import { Post, PostSchema } from './schemas/post.schema.js';
     CommentsService,
     LikesService,
     ReportsService,
+    BlogIntegrations,
     AuditLogService,
     NotificationService,
     OptionalJwtAuthGuard,
