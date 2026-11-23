@@ -1,9 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import { TIME_REGEX } from '../constants/time-regex.js';
 
 export type HotelDocument = HydratedDocument<Hotel>;
-
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 @Schema({ _id: false })
 export class CancellationTier {
@@ -34,7 +33,7 @@ export class Hotel {
   @Prop({ required: true })
   description: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'City', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'City', required: true })
   cityId: Types.ObjectId;
 
   @Prop({ required: true })
@@ -48,9 +47,6 @@ export class Hotel {
 
   @Prop({ default: 0, min: 0 })
   reviewCount: number;
-
-  @Prop({ required: true, uppercase: true, match: /^[A-Z]{3}$/ })
-  currency: string;
 
   @Prop({ type: [String], default: [] })
   amenities: string[];
