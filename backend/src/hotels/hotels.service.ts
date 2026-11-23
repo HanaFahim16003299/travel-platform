@@ -9,6 +9,7 @@ import { Model, isValidObjectId } from 'mongoose';
 import { Hotel, HotelDocument } from './schemas/hotel.schema.js';
 import { CreateHotelDto } from './dto/create-hotel.dto.js';
 import { UpdateHotelDto } from './dto/update-hotel.dto.js';
+import { UpdatePoliciesDto } from './dto/update-policies.dto.js';
 
 @Injectable()
 export class HotelsService {
@@ -45,5 +46,41 @@ export class HotelsService {
 
     if (!hotel) throw new NotFoundException('Hotel not found');
     return hotel;
+  }
+
+  // HTL-09, HTL-10: PUT replaces check-in/out times and the cancellation policy
+  async updatePolicies(id: string, dto: UpdatePoliciesDto) {
+    if (!isValidObjectId(id)) throw new BadRequestException('Invalid id');
+
+    const days = dto.cancellationTiers.map((tier) => tier.daysBeforeCheckIn);
+    if (new Set(days).size !== days.length) {
+      throw new BadRequestException(
+        'cancellationTiers cannot share the same daysBeforeCheckIn',
+      );
+    }
+
+    const cancellationTiers = [...dto.cancellationTiers].sort(
+      (a, b) => b.daysBeforeCheckIn - a.daysBeforeCheckIn,
+    );
+
+    const hotel = await this.hotelModel.findOneAndUpdate(
+      { _id: id, isActive: true },
+      {
+        $set: {
+          checkInTime: dto.checkInTime,
+          checkOutTime: dto.checkOutTime,
+          'policies.cancellationTiers': cancellationTiers,
+        },
+      },
+      { new: true, runValidators: true },
+    );
+
+    if (!hotel) throw new NotFoundException('Hotel not found');
+
+    return {
+      checkInTime: hotel.checkInTime,
+      checkOutTime: hotel.checkOutTime,
+      cancellationTiers: hotel.policies.cancellationTiers,
+    };
   }
 }

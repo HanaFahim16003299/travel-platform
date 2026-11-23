@@ -1,5 +1,4 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 import {
   IsArray,
   IsInt,
@@ -11,8 +10,8 @@ import {
   Max,
   Min,
 } from 'class-validator';
+import { TIME_REGEX } from '../constants/time-regex.js';
 
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 export class CreateHotelDto {
   @ApiProperty({ example: 'Grand Berlin Hotel' })
   @IsString()
@@ -39,13 +38,6 @@ export class CreateHotelDto {
   @Min(1)
   @Max(5)
   starRating?: number;
-
-  @ApiProperty({ example: 'EUR', description: 'ISO 4217 currency code' })
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.toUpperCase() : value,
-  )
-  @Matches(/^[A-Z]{3}$/, { message: 'currency must be a 3-letter code' })
-  currency: string;
 
   @ApiPropertyOptional({ type: [String], example: ['wifi', 'pool'] })
   @IsOptional()
