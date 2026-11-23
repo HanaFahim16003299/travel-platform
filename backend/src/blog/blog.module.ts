@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { AuditLogService, NotificationService } from '../admin/temp-shared-services.js';
 import { AdminModerationController } from './admin-moderation.controller.js';
 import { BlogController } from './blog.controller.js';
 import { BlogService } from './blog.service.js';
@@ -43,8 +42,6 @@ import { Post, PostSchema } from './schemas/post.schema.js';
     LikesService,
     ReportsService,
     BlogIntegrations,
-    AuditLogService,
-    NotificationService,
     OptionalJwtAuthGuard,
   ],
 })
