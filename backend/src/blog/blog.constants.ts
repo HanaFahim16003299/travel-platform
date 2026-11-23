@@ -29,6 +29,7 @@ export const BLOG_LIMITS = {
   commentLength: 500,
   reportReasonLength: 500,
   adminNoteLength: 500,
+  imagesPerPost: 5,
   defaultPage: 1,
   defaultPageSize: 10,
   maxPageSize: 100,

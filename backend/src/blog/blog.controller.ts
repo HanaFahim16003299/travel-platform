@@ -8,11 +8,17 @@ import {
   Post as HttpPost,
   Query,
   Req,
+  UploadedFile,
+  UseFilters,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBadRequestResponse,
+  ApiBody,
   ApiCreatedResponse,
+  ApiConsumes,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
@@ -28,6 +34,8 @@ import { ListPostsQueryDto } from './dto/list-posts-query.dto.js';
 import { UpdatePostDto } from './dto/update-post.dto.js';
 import { BlogService } from './blog.service.js';
 import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard.js';
+import { imageUploadOptions } from '../uploads/image-upload.options.js';
+import { ImageUploadExceptionFilter } from './image-upload-exception.filter.js';
 
 @ApiTags('Posts')
 @Controller('posts')
@@ -61,6 +69,53 @@ export class BlogController {
   @ApiBadRequestResponse({ description: 'Invalid pagination values' })
   findMine(@CurrentUser() user: AuthUser, @Query() query: ListPostsQueryDto) {
     return this.blogService.findMine(user.id, query);
+  }
+
+  // BLG-10, GEN-08
+  @HttpPost(':id/images')
+  @Auth()
+  @UseInterceptors(FileInterceptor('image', imageUploadOptions()))
+  @UseFilters(ImageUploadExceptionFilter)
+  @ApiOperation({ summary: 'Attach a JPG or PNG image to my post' })
+  @ApiParam({ name: 'id', description: 'Post MongoDB id' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['image'],
+      properties: { image: { type: 'string', format: 'binary' } },
+    },
+  })
+  @ApiCreatedResponse({ description: 'Image attached to the post' })
+  @ApiBadRequestResponse({
+    description: 'Missing file, unsupported format, size limit, or image-count limit',
+  })
+  @ApiForbiddenResponse({ description: 'The post belongs to another author' })
+  @ApiNotFoundResponse({ description: 'Post not found' })
+  addImage(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.blogService.addImage(user.id, id, file);
+  }
+
+  // BLG-10, GEN-08
+  @Delete(':id/images/:imageId')
+  @Auth()
+  @ApiOperation({ summary: 'Remove an image from my post' })
+  @ApiParam({ name: 'id', description: 'Post MongoDB id' })
+  @ApiParam({ name: 'imageId', description: 'Image UUID' })
+  @ApiOkResponse({ description: 'Image removed from the post and storage' })
+  @ApiBadRequestResponse({ description: 'Invalid post id or image id' })
+  @ApiForbiddenResponse({ description: 'The post belongs to another author' })
+  @ApiNotFoundResponse({ description: 'Post or image not found' })
+  removeImage(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('imageId') imageId: string,
+  ) {
+    return this.blogService.removeImage(user.id, id, imageId);
   }
 
   // BLG-02

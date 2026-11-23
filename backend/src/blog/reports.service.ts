@@ -17,6 +17,7 @@ import {
 import { CreateReportDto } from './dto/create-report.dto.js';
 import { ListReportsQueryDto } from './dto/list-reports-query.dto.js';
 import { ReviewReportDto } from './dto/review-report.dto.js';
+import { deletePostImages } from './image-files.js';
 import { Comment, CommentDocument } from './schemas/comment.schema.js';
 import { ContentReport, ContentReportDocument } from './schemas/content-report.schema.js';
 import { Like, LikeDocument } from './schemas/like.schema.js';
@@ -270,12 +271,14 @@ export class ReportsService {
 
   private async deleteTarget(targetType: ReportTargetType, targetId: Types.ObjectId) {
     if (targetType === ReportTargetType.Post) {
-      const post = await this.posts.findById(targetId).select('authorId');
+      const post = await this.posts.findById(targetId).select('authorId images');
       if (!post) throw new NotFoundException('Post not found');
+      const images = post.images ?? [];
       await post.deleteOne();
       await Promise.all([
         this.comments.deleteMany({ postId: targetId }),
         this.likes.deleteMany({ postId: targetId }),
+        deletePostImages(images),
       ]);
       return String(post.authorId);
     }

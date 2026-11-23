@@ -5,7 +5,20 @@ import { BLOG_LIMITS, DEFAULT_POST_STATUS, PostStatus } from '../blog.constants.
 
 export type PostDocument = HydratedDocument<Post>;
 
-// BLG-01, BLG-02, BLG-03, BLG-08
+@Schema({ _id: false })
+export class PostImage {
+  @Prop({ required: true })
+  id: string;
+
+  @Prop({ required: true })
+  url: string;
+
+  @Prop({ required: true })
+  filename: string;
+}
+export const PostImageSchema = SchemaFactory.createForClass(PostImage);
+
+// BLG-01, BLG-02, BLG-03, BLG-08, BLG-10, GEN-08
 @Schema({ timestamps: true })
 export class Post {
   @Prop({ required: true, trim: true, maxlength: BLOG_LIMITS.titleLength })
@@ -17,8 +30,8 @@ export class Post {
   @Prop({ type: [{ type: String, trim: true, lowercase: true }], default: [] })
   tags: string[];
 
-  @Prop({ type: [String], default: [] })
-  images: string[];
+  @Prop({ type: [PostImageSchema], default: [] })
+  images: PostImage[];
 
   @Prop({ type: Types.ObjectId, ref: User.name, required: true, index: true })
   authorId: Types.ObjectId;
