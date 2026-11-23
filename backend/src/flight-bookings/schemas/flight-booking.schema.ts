@@ -24,19 +24,36 @@ export class Passenger {
 }
 const PassengerSchema = SchemaFactory.createForClass(Passenger);
 
+/**
+ * One leg of the trip. Prices and airline policies are COPIED here when the
+ * booking is created, so later changes by the airline don't affect this booking.
+ */
 @Schema({ _id: false })
 export class Segment {
   @Prop({ type: Types.ObjectId, ref: 'Flight', required: true }) flightId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, required: true }) cabinId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: 'Airline', required: true }) airlineId: Types.ObjectId;
+  @Prop({ required: true }) flightNumber: string;
+  @Prop({ type: Types.ObjectId, required: true }) departureAirportId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true }) arrivalAirportId: Types.ObjectId;
+  @Prop({ required: true }) departureAt: Date;
+  @Prop({ required: true }) arrivalAt: Date;
   @Prop({ required: true }) cabinClass: string;
   @Prop({ required: true }) unitPrice: number;
-  @Prop({ required: true }) departureAt: Date;
-  @Prop({ default: 0 }) freeBags: number;
-  @Prop() maxBagWeightKg?: number;
+
+  // Baggage snapshot
+  @Prop({ default: 0 }) freeCheckedBags: number;
+  @Prop() checkedBagWeightKg?: number;
   @Prop({ default: 0 }) extraBagPrice: number;
   @Prop({ default: 0 }) maxExtraBags: number;
+
+  // Cancellation snapshot: tiers (FLT-09) if the airline has them,
+  // otherwise the airline's single-rule policy.
   @Prop({ type: [CancellationTierSchema], default: [] }) cancellationTiers: CancellationTier[];
+  @Prop({ default: false }) refundable: boolean;
+  @Prop({ default: 0 }) refundPercentage: number;
+  @Prop({ default: 0 }) cancellationFee: number;
+  @Prop({ default: 0 }) cancellationDeadlineHours: number;
 }
 const SegmentSchema = SchemaFactory.createForClass(Segment);
 
@@ -45,6 +62,7 @@ export class FlightBooking {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
   userId: Types.ObjectId;
 
+  // Outbound flight + cabin at the top level: Mahmoud's moderator endpoints read flightId
   @Prop({ type: Types.ObjectId, ref: 'Flight', required: true, index: true })
   flightId: Types.ObjectId;
 
@@ -53,7 +71,7 @@ export class FlightBooking {
 
   @Prop({ type: [SegmentSchema], required: true }) segments: Segment[];
   @Prop({ type: [PassengerSchema], required: true }) passengers: Passenger[];
-  @Prop({ required: true, min: 1 }) seatCount: number;
+  @Prop({ required: true, min: 1 }) seatCount: number; // adults + children (infants take no seat)
 
   @Prop({ type: String, enum: FlightBookingStatus, default: FlightBookingStatus.DRAFT, index: true })
   status: FlightBookingStatus;
@@ -67,15 +85,21 @@ export class FlightBooking {
   @Prop({ required: true }) currency: string;
 
   @Prop({ unique: true, sparse: true }) bookingReference?: string;
-  @Prop({ type: Types.ObjectId, ref: 'Payment' }) paymentId?: Types.ObjectId;
+  @Prop() paymentId?: string;
   @Prop() confirmedAt?: Date;
   @Prop() cancelledAt?: Date;
   @Prop() refundAmount?: number;
-  @Prop({ type: Types.ObjectId, ref: 'Refund' }) refundId?: Types.ObjectId;
+  @Prop() refundId?: string;
+
+  // Set by Mongoose because of timestamps: true
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export type FlightBookingDocument = HydratedDocument<FlightBooking>;
 export const FlightBookingSchema = SchemaFactory.createForClass(FlightBooking);
 
-// Drafts delete themselves after draftExpiresAt (drafts hold no seats)
+// Drafts delete themselves after draftExpiresAt. Only drafts have this field,
+// and drafts hold no seats, so nothing leaks.
 FlightBookingSchema.index({ draftExpiresAt: 1 }, { expireAfterSeconds: 0 });
+FlightBookingSchema.index({ 'segments.flightId': 1, status: 1 });
