@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 
 import { InjectModel, InjectConnection } from '@nestjs/mongoose';
@@ -39,9 +40,13 @@ import {
   HOTEL_HOLD_MINUTES,
   MAX_BOOKING_REFERENCE_ATTEMPTS,
 } from './constants.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
+import { NotificationType } from '../notifications/notification-types.js';
 
 @Injectable()
 export class HotelBookingsService {
+  private readonly logger = new Logger(HotelBookingsService.name);
+
   constructor(
     @InjectModel(HotelBooking.name)
     private readonly bookingModel: Model<HotelBookingDocument>,
@@ -57,6 +62,8 @@ export class HotelBookingsService {
 
     @InjectConnection()
     private readonly connection: Connection,
+
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ==========================================
@@ -463,6 +470,9 @@ export class HotelBookingsService {
   async confirmBooking(bookingId: string) {
     const bookingObjectId = this.validateId(bookingId, 'booking');
 
+    let confirmedBooking: HotelBookingDocument | undefined;
+    let alreadyConfirmed = false;
+
     // A duplicate bookingReference aborts the whole transaction, so the
     // entire attempt (not just the reference write) is retried.
     for (
@@ -473,7 +483,7 @@ export class HotelBookingsService {
       const session = await this.connection.startSession();
 
       try {
-        return await session.withTransaction(async () => {
+        const result = await session.withTransaction(async () => {
           const booking = await this.bookingModel
             .findById(bookingObjectId)
             .session(session);
@@ -484,7 +494,7 @@ export class HotelBookingsService {
 
           // Prevent duplicate confirmation
           if (booking.status === BookingStatus.Confirmed) {
-            return booking;
+            return { booking, alreadyConfirmed: true };
           }
 
           // Only pending bookings may be confirmed
@@ -534,8 +544,13 @@ export class HotelBookingsService {
           booking.confirmedAt = new Date();
           booking.bookingReference = generateBookingReference();
 
-          return await booking.save({ session });
+          const saved = await booking.save({ session });
+          return { booking: saved, alreadyConfirmed: false };
         });
+
+        confirmedBooking = result.booking;
+        alreadyConfirmed = result.alreadyConfirmed;
+        break;
       } catch (error) {
         if (this.isDuplicateKeyError(error)) {
           if (attempt < MAX_BOOKING_REFERENCE_ATTEMPTS) {
@@ -553,10 +568,53 @@ export class HotelBookingsService {
       }
     }
 
-    // Unreachable: the loop above always returns or throws.
-    throw new InternalServerErrorException(
-      'Could not generate a booking reference',
-    );
+    if (!confirmedBooking) {
+      // Unreachable: the loop above always returns, breaks or throws.
+      throw new InternalServerErrorException(
+        'Could not generate a booking reference',
+      );
+    }
+
+    // Sent only once the transaction has committed, so a notification
+    // failure can never roll back or fail the confirmation itself.
+    if (!alreadyConfirmed) {
+      await this.notifyConfirmed(confirmedBooking);
+    }
+
+    return confirmedBooking;
+  }
+
+  // ==========================================
+  // HELPER: NOTIFY USER OF CONFIRMATION (HTL-17)
+  // ==========================================
+
+  private async notifyConfirmed(booking: HotelBookingDocument): Promise<void> {
+    try {
+      const hotel = await this.hotelModel
+        .findById(booking.hotelId)
+        .select('name')
+        .lean();
+
+      const hotelName = hotel?.name ?? 'your hotel';
+      const checkIn = booking.checkIn.toISOString().slice(0, 10);
+      const checkOut = booking.checkOut.toISOString().slice(0, 10);
+
+      await this.notifications.create({
+        userId: String(booking.userId),
+        type: NotificationType.BookingStateChanged,
+        title: 'Hotel booking confirmed',
+        message:
+          `Your booking ${booking.bookingReference} at ${hotelName} ` +
+          `(${checkIn} to ${checkOut}) is confirmed. ` +
+          `Total: ${booking.totalPrice} ${booking.currency}.`,
+        referenceType: 'hotel_booking',
+        referenceId: String(booking._id),
+      });
+    } catch (error) {
+      this.logger.error(
+        `Notification failed for booking ${String(booking._id)}: ${String(error)}`,
+      );
+    }
   }
 
   // ==========================================

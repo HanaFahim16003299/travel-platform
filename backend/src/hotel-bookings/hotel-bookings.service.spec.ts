@@ -16,6 +16,10 @@ function withSession(resolvedValue: unknown) {
   return { session: vi.fn().mockResolvedValue(resolvedValue) };
 }
 
+function fakeNotifications() {
+  return { create: vi.fn().mockResolvedValue(undefined) };
+}
+
 interface BuildServiceOptions {
   hotel?: unknown;
   rooms?: unknown[];
@@ -68,6 +72,7 @@ function buildService(options: BuildServiceOptions = {}) {
     endSession: vi.fn(),
   };
   const connection = { startSession: vi.fn().mockResolvedValue(mongoSession) };
+  const notifications = fakeNotifications();
 
   const service = new HotelBookingsService(
     bookingModel,
@@ -75,6 +80,7 @@ function buildService(options: BuildServiceOptions = {}) {
     roomModel as any,
     availabilityModel as any,
     connection as any,
+    notifications as any,
   );
 
   return {
@@ -83,6 +89,7 @@ function buildService(options: BuildServiceOptions = {}) {
     hotelModel,
     roomModel,
     availabilityModel,
+    notifications,
     savedDocs,
   };
 }
@@ -119,6 +126,7 @@ describe('HotelBookingsService.create - hold duration (HTL-18)', () => {
 function bookingTemplate(overrides: Record<string, unknown> = {}) {
   return {
     _id: BOOKING_ID,
+    userId: USER_ID,
     hotelId: HOTEL_ID,
     status: BookingStatus.PendingPayment,
     checkIn: new Date('2026-01-02T00:00:00.000Z'),
@@ -128,6 +136,8 @@ function bookingTemplate(overrides: Record<string, unknown> = {}) {
     expiresAt: new Date(Date.now() + HOTEL_HOLD_MINUTES * 60 * 1000),
     confirmedAt: null,
     bookingReference: undefined,
+    totalPrice: 100,
+    currency: 'USD',
     ...overrides,
   };
 }
@@ -135,6 +145,8 @@ function bookingTemplate(overrides: Record<string, unknown> = {}) {
 interface BuildConfirmServiceOptions {
   reservedRecords?: number;
   save?: (doc: Record<string, unknown>) => Promise<unknown>;
+  notifications?: { create: ReturnType<typeof vi.fn> };
+  hotelName?: string;
 }
 
 function buildConfirmService(
@@ -154,6 +166,16 @@ function buildConfirmService(
     }),
   };
 
+  const hotelModel = {
+    findById: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        lean: vi
+          .fn()
+          .mockResolvedValue({ name: options.hotelName ?? 'Test Hotel' }),
+      }),
+    }),
+  };
+
   const availabilityModel = {
     countDocuments: vi
       .fn()
@@ -165,16 +187,26 @@ function buildConfirmService(
     endSession: vi.fn(),
   }));
   const connection = { startSession };
+  const notifications = options.notifications ?? fakeNotifications();
 
   const service = new HotelBookingsService(
     bookingModel as any,
-    {} as any,
+    hotelModel as any,
     {} as any,
     availabilityModel as any,
     connection as any,
+    notifications as any,
   );
 
-  return { service, bookingModel, availabilityModel, connection, docs };
+  return {
+    service,
+    bookingModel,
+    hotelModel,
+    availabilityModel,
+    connection,
+    notifications,
+    docs,
+  };
 }
 
 describe('HotelBookingsService.confirmBooking - booking reference (HTL-17)', () => {
@@ -253,5 +285,53 @@ describe('HotelBookingsService.confirmBooking - booking reference (HTL-17)', () 
       'disk full',
     );
     expect(connection.startSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('HotelBookingsService.confirmBooking - notification (HTL-17)', () => {
+  it('sends an in-app notification once, after the first confirm', async () => {
+    const { service, notifications } = buildConfirmService(bookingTemplate());
+
+    const result: any = await service.confirmBooking(BOOKING_ID);
+
+    expect(notifications.create).toHaveBeenCalledTimes(1);
+    expect(notifications.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        referenceType: 'hotel_booking',
+        referenceId: BOOKING_ID,
+        message: expect.stringContaining(result.bookingReference),
+      }),
+    );
+    const message = notifications.create.mock.calls[0][0].message as string;
+    expect(message).toContain('Test Hotel');
+    expect(message).toContain('100');
+  });
+
+  it('does not notify again on an idempotent re-confirm', async () => {
+    const { service, notifications } = buildConfirmService(
+      bookingTemplate({
+        status: BookingStatus.Confirmed,
+        bookingReference: 'ABC123',
+      }),
+    );
+
+    await service.confirmBooking(BOOKING_ID);
+
+    expect(notifications.create).not.toHaveBeenCalled();
+  });
+
+  it('confirms successfully even when the notification throws', async () => {
+    const notifications = {
+      create: vi.fn().mockRejectedValue(new Error('notify down')),
+    };
+    const { service } = buildConfirmService(bookingTemplate(), {
+      notifications,
+    });
+
+    const result: any = await service.confirmBooking(BOOKING_ID);
+
+    expect(result.status).toBe(BookingStatus.Confirmed);
+    expect(notifications.create).toHaveBeenCalledTimes(1);
   });
 });
