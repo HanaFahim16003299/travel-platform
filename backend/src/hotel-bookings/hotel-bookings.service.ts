@@ -1,4 +1,3 @@
-
 import {
   Injectable,
   BadRequestException,
@@ -6,10 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 
-import {
-  InjectModel,
-  InjectConnection,
-} from '@nestjs/mongoose';
+import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 
 import type { Model, Connection } from 'mongoose';
 
@@ -18,15 +14,9 @@ import {
   HotelBookingDocument,
 } from './schemas/hotel-booking.schema.js';
 
-import {
-  Hotel,
-  HotelDocument,
-} from '../hotels/schemas/hotel.schema.js';
+import { Hotel, HotelDocument } from '../hotels/schemas/hotel.schema.js';
 
-import {
-  Room,
-  RoomDocument,
-} from '../hotels/schemas/room.schema.js';
+import { Room, RoomDocument } from '../hotels/schemas/room.schema.js';
 
 import {
   RoomAvailability,
@@ -43,12 +33,10 @@ import { BookingStatus } from './enums/booking-status.enum.js';
 
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
 import { buildMeta } from '../common/utils/pagination.js';
+import { HOTEL_HOLD_MINUTES } from './constants.js';
 
 @Injectable()
 export class HotelBookingsService {
-  // Placeholder until confirmed against Excel requirements
-  private readonly holdDurationMinutes = 15;
-
   constructor(
     @InjectModel(HotelBooking.name)
     private readonly bookingModel: Model<HotelBookingDocument>,
@@ -60,8 +48,7 @@ export class HotelBookingsService {
     private readonly roomModel: Model<RoomDocument>,
 
     @InjectModel(RoomAvailability.name)
-    private readonly availabilityModel:
-      Model<RoomAvailabilityDocument>,
+    private readonly availabilityModel: Model<RoomAvailabilityDocument>,
 
     @InjectConnection()
     private readonly connection: Connection,
@@ -85,21 +72,15 @@ export class HotelBookingsService {
 
     // Validate selected rooms
     if (!Array.isArray(dto.roomIds) || dto.roomIds.length === 0) {
-      throw new BadRequestException(
-        'At least one room must be selected',
-      );
+      throw new BadRequestException('At least one room must be selected');
     }
 
     // Validate and normalize room IDs
-    const roomIds = dto.roomIds.map((id) =>
-      this.validateId(id, 'room'),
-    );
+    const roomIds = dto.roomIds.map((id) => this.validateId(id, 'room'));
 
     // Prevent duplicate room selection
     if (new Set(roomIds).size !== roomIds.length) {
-      throw new BadRequestException(
-        'Duplicate room IDs are not allowed',
-      );
+      throw new BadRequestException('Duplicate room IDs are not allowed');
     }
 
     // Validate number of guests
@@ -122,9 +103,7 @@ export class HotelBookingsService {
           .session(session);
 
         if (!hotel) {
-          throw new NotFoundException(
-            'Hotel not found or inactive',
-          );
+          throw new NotFoundException('Hotel not found or inactive');
         }
 
         // Find selected rooms
@@ -145,8 +124,7 @@ export class HotelBookingsService {
 
         // Calculate total room capacity
         const totalCapacity = rooms.reduce(
-          (sum, room) =>
-            sum + room.maxAdults + room.maxChildren,
+          (sum, room) => sum + room.maxAdults + room.maxChildren,
           0,
         );
 
@@ -158,30 +136,23 @@ export class HotelBookingsService {
 
         // Calculate total price using integer cents
         const nightlyPriceInCents = rooms.reduce(
-          (sum, room) =>
-            sum + Math.round(room.pricePerNight * 100),
+          (sum, room) => sum + Math.round(room.pricePerNight * 100),
           0,
         );
 
-        const totalPriceInCents =
-          nightlyPriceInCents * nights.length;
+        const totalPriceInCents = nightlyPriceInCents * nights.length;
 
         if (
           !Number.isSafeInteger(totalPriceInCents) ||
           totalPriceInCents <= 0
         ) {
-          throw new BadRequestException(
-            'Invalid booking price',
-          );
+          throw new BadRequestException('Invalid booking price');
         }
 
         const totalPrice = totalPriceInCents / 100;
 
         // Calculate booking expiration deadline
-        const expiresAt = new Date(
-          Date.now() +
-            this.holdDurationMinutes * 60 * 1000,
-        );
+        const expiresAt = new Date(Date.now() + HOTEL_HOLD_MINUTES * 60 * 1000);
 
         // Construct booking document
         // Mongoose automatically generates its ObjectId
@@ -223,8 +194,7 @@ export class HotelBookingsService {
         });
 
         // Calculate the number of required room-night records
-        const expectedRecords =
-          roomIds.length * nights.length;
+        const expectedRecords = roomIds.length * nights.length;
 
         // Atomically reserve every selected room-night
         const result = await this.availabilityModel.updateMany(
@@ -264,18 +234,10 @@ export class HotelBookingsService {
   // HTL-20: LIST USER BOOKINGS
   // ==========================================
 
-  async findAll(
-    userId: string,
-    query: PaginationQueryDto,
-  ) {
+  async findAll(userId: string, query: PaginationQueryDto) {
     const userObjectId = this.validateId(userId, 'user');
 
-    const {
-      page = 1,
-      limit = 10,
-      sort,
-      order,
-    } = query;
+    const { page = 1, limit = 10, sort, order } = query;
 
     // Validate pagination
     if (
@@ -285,9 +247,7 @@ export class HotelBookingsService {
       limit < 1 ||
       limit > 100
     ) {
-      throw new BadRequestException(
-        'Invalid pagination parameters',
-      );
+      throw new BadRequestException('Invalid pagination parameters');
     }
 
     // Restrict sorting to valid booking fields
@@ -300,22 +260,16 @@ export class HotelBookingsService {
     ];
 
     if (sort && !allowedSortFields.includes(sort)) {
-      throw new BadRequestException(
-        'Invalid sorting field',
-      );
+      throw new BadRequestException('Invalid sorting field');
     }
 
     if (order && order !== 'asc' && order !== 'desc') {
-      throw new BadRequestException(
-        'Invalid sorting order',
-      );
+      throw new BadRequestException('Invalid sorting order');
     }
 
     const sortField = sort ?? 'createdAt';
 
-    const direction: 1 | -1 = sort
-    ? (order === 'asc' ? 1 : -1)
-    : -1;
+    const direction: 1 | -1 = sort ? (order === 'asc' ? 1 : -1) : -1;
 
     // Only retrieve bookings belonging to this user
     const filter = {
@@ -347,16 +301,10 @@ export class HotelBookingsService {
   // HTL-20: VIEW SPECIFIC BOOKING
   // ==========================================
 
-  async findOne(
-    userId: string,
-    bookingId: string,
-  ) {
+  async findOne(userId: string, bookingId: string) {
     const userObjectId = this.validateId(userId, 'user');
 
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
     const booking = await this.bookingModel
       .findOne({
@@ -367,9 +315,7 @@ export class HotelBookingsService {
       .lean();
 
     if (!booking) {
-      throw new NotFoundException(
-        'Booking not found',
-      );
+      throw new NotFoundException('Booking not found');
     }
 
     return booking;
@@ -379,16 +325,10 @@ export class HotelBookingsService {
   // HTL-21, PAY-03: CANCEL HOTEL BOOKING
   // ==========================================
 
-  async cancel(
-    userId: string,
-    bookingId: string,
-  ) {
+  async cancel(userId: string, bookingId: string) {
     const userObjectId = this.validateId(userId, 'user');
 
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
     const session = await this.connection.startSession();
 
@@ -403,9 +343,7 @@ export class HotelBookingsService {
           .session(session);
 
         if (!booking) {
-          throw new NotFoundException(
-            'Booking not found',
-          );
+          throw new NotFoundException('Booking not found');
         }
 
         // Prevent duplicate cancellations and refunds
@@ -425,9 +363,7 @@ export class HotelBookingsService {
 
         // Expired bookings cannot be cancelled
         if (booking.status === BookingStatus.Expired) {
-          throw new BadRequestException(
-            'Expired bookings cannot be cancelled',
-          );
+          throw new BadRequestException('Expired bookings cannot be cancelled');
         }
 
         // Only pending and confirmed bookings are eligible
@@ -435,9 +371,7 @@ export class HotelBookingsService {
           booking.status !== BookingStatus.PendingPayment &&
           booking.status !== BookingStatus.Confirmed
         ) {
-          throw new BadRequestException(
-            'This booking cannot be cancelled',
-          );
+          throw new BadRequestException('This booking cannot be cancelled');
         }
 
         const now = new Date();
@@ -450,22 +384,16 @@ export class HotelBookingsService {
           );
         }
 
-        const wasConfirmed =
-          booking.status === BookingStatus.Confirmed;
+        const wasConfirmed = booking.status === BookingStatus.Confirmed;
 
         let refundAmount = 0;
         let refundPercent = 0;
 
         // Calculate refund for confirmed bookings
         if (wasConfirmed) {
-          refundPercent = this.calculateRefundPercent(
-            booking,
-            now,
-          );
+          refundPercent = this.calculateRefundPercent(booking, now);
 
-          const totalPriceInCents = Math.round(
-            booking.totalPrice * 100,
-          );
+          const totalPriceInCents = Math.round(booking.totalPrice * 100);
 
           const refundInCents = Math.round(
             (totalPriceInCents * refundPercent) / 100,
@@ -482,13 +410,9 @@ export class HotelBookingsService {
         booking.refundAmount = refundAmount;
         booking.refundPercent = refundPercent;
 
-        booking.refundStatus =
-          refundAmount > 0
-            ? 'Pending'
-            : 'Not Required';
+        booking.refundStatus = refundAmount > 0 ? 'Pending' : 'Not Required';
 
-        booking.refundRequestedAt =
-          refundAmount > 0 ? now : null;
+        booking.refundRequestedAt = refundAmount > 0 ? now : null;
 
         await booking.save({ session });
 
@@ -532,10 +456,7 @@ export class HotelBookingsService {
   // ==========================================
 
   async confirmBooking(bookingId: string) {
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
     const session = await this.connection.startSession();
 
@@ -546,9 +467,7 @@ export class HotelBookingsService {
           .session(session);
 
         if (!booking) {
-          throw new NotFoundException(
-            'Booking not found',
-          );
+          throw new NotFoundException('Booking not found');
         }
 
         // Prevent duplicate confirmation
@@ -558,19 +477,12 @@ export class HotelBookingsService {
 
         // Only pending bookings may be confirmed
         if (booking.status !== BookingStatus.PendingPayment) {
-          throw new ConflictException(
-            'Only pending bookings can be confirmed',
-          );
+          throw new ConflictException('Only pending bookings can be confirmed');
         }
 
         // Verify expiration deadline
-        if (
-          !booking.expiresAt ||
-          booking.expiresAt.getTime() <= Date.now()
-        ) {
-          throw new ConflictException(
-            'Booking payment deadline has expired',
-          );
+        if (!booking.expiresAt || booking.expiresAt.getTime() <= Date.now()) {
+          throw new ConflictException('Booking payment deadline has expired');
         }
 
         // Ensure that policies were accepted before payment
@@ -581,28 +493,21 @@ export class HotelBookingsService {
         }
 
         // Verify the exact reserved room-night records
-        const nights = getNightsBetween(
-          booking.checkIn,
-          booking.checkOut,
-        );
+        const nights = getNightsBetween(booking.checkIn, booking.checkOut);
 
-        const roomIds = booking.rooms.map(
-          (room) => room.roomId,
-        );
+        const roomIds = booking.rooms.map((room) => room.roomId);
 
-        const expectedRecords =
-          roomIds.length * nights.length;
+        const expectedRecords = roomIds.length * nights.length;
 
-        const reservedRecords =
-          await this.availabilityModel
-            .countDocuments({
-              bookingId: booking._id,
-              hotelId: booking.hotelId,
-              roomId: { $in: roomIds },
-              date: { $in: nights },
-              isBlocked: false,
-            })
-            .session(session);
+        const reservedRecords = await this.availabilityModel
+          .countDocuments({
+            bookingId: booking._id,
+            hotelId: booking.hotelId,
+            roomId: { $in: roomIds },
+            date: { $in: nights },
+            isBlocked: false,
+          })
+          .session(session);
 
         if (reservedRecords !== expectedRecords) {
           throw new ConflictException(
@@ -626,10 +531,7 @@ export class HotelBookingsService {
   // ==========================================
 
   async expireBooking(bookingId: string) {
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
     const session = await this.connection.startSession();
 
@@ -640,9 +542,7 @@ export class HotelBookingsService {
           .session(session);
 
         if (!booking) {
-          throw new NotFoundException(
-            'Booking not found',
-          );
+          throw new NotFoundException('Booking not found');
         }
 
         // Do not expire confirmed or cancelled bookings
@@ -655,9 +555,7 @@ export class HotelBookingsService {
 
         // Verify that the deadline has actually passed
         if (!booking.expiresAt) {
-          throw new ConflictException(
-            'Booking has no payment deadline',
-          );
+          throw new ConflictException('Booking has no payment deadline');
         }
 
         if (booking.expiresAt.getTime() > now.getTime()) {
@@ -702,35 +600,28 @@ export class HotelBookingsService {
     booking: HotelBookingDocument,
     cancellationDate: Date,
   ): number {
-    const millisecondsPerDay =
-      24 * 60 * 60 * 1000;
+    const millisecondsPerDay = 24 * 60 * 60 * 1000;
 
     // Calculate complete days before check-in
     const daysBeforeCheckIn = Math.floor(
-      (
-        booking.checkIn.getTime() -
-        cancellationDate.getTime()
-      ) / millisecondsPerDay,
+      (booking.checkIn.getTime() - cancellationDate.getTime()) /
+        millisecondsPerDay,
     );
 
     // Use original policies stored in booking
-    const tiers =
-      booking.policies?.cancellationTiers ?? [];
+    const tiers = booking.policies?.cancellationTiers ?? [];
 
     // Sort cancellation tiers from highest to lowest
     const sortedTiers = [...tiers].sort(
-      (a, b) =>
-        b.daysBeforeCheckIn - a.daysBeforeCheckIn,
+      (a, b) => b.daysBeforeCheckIn - a.daysBeforeCheckIn,
     );
 
     // Find the applicable cancellation tier
     const applicableTier = sortedTiers.find(
-      (tier) =>
-        daysBeforeCheckIn >= tier.daysBeforeCheckIn,
+      (tier) => daysBeforeCheckIn >= tier.daysBeforeCheckIn,
     );
 
-    const refundPercent =
-      applicableTier?.refundPercent ?? 0;
+    const refundPercent = applicableTier?.refundPercent ?? 0;
 
     // Protect against invalid cancellation policy values
     if (
@@ -750,17 +641,9 @@ export class HotelBookingsService {
   // HELPER: VALIDATE MONGODB ID
   // ==========================================
 
-  private validateId(
-    id: string,
-    entity: string,
-  ): string {
-    if (
-      typeof id !== 'string' ||
-      !/^[a-fA-F0-9]{24}$/.test(id)
-    ) {
-      throw new BadRequestException(
-        `Invalid ${entity} ID`,
-      );
+  private validateId(id: string, entity: string): string {
+    if (typeof id !== 'string' || !/^[a-fA-F0-9]{24}$/.test(id)) {
+      throw new BadRequestException(`Invalid ${entity} ID`);
     }
 
     // Mongoose automatically casts valid ID strings
@@ -772,26 +655,17 @@ export class HotelBookingsService {
   // ==========================================
 
   private parseDate(value: string): Date {
-    if (
-      typeof value !== 'string' ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(value)
-    ) {
-      throw new BadRequestException(
-        'Dates must use YYYY-MM-DD format',
-      );
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new BadRequestException('Dates must use YYYY-MM-DD format');
     }
 
-    const date = new Date(
-      `${value}T00:00:00.000Z`,
-    );
+    const date = new Date(`${value}T00:00:00.000Z`);
 
     if (
       Number.isNaN(date.getTime()) ||
       date.toISOString().slice(0, 10) !== value
     ) {
-      throw new BadRequestException(
-        'Invalid booking date',
-      );
+      throw new BadRequestException('Invalid booking date');
     }
 
     return date;
