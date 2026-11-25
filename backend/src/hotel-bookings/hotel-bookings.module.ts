@@ -11,6 +11,7 @@ import { HotelsModule } from '../hotels/hotels.module.js';
 import { HotelBookingsController } from './hotel-bookings.controller.js';
 
 import { HotelBookingsService } from './hotel-bookings.service.js';
+import { HotelBookingsScheduler } from './hotel-bookings.scheduler.js';
 
 import { HotelReservationsController } from './reservations/hotel-reservations.controller.js';
 import { HotelReservationsService } from './reservations/hotel-reservations.service.js';
@@ -30,7 +31,11 @@ import { HotelReservationsService } from './reservations/hotel-reservations.serv
 
   controllers: [HotelBookingsController, HotelReservationsController],
 
-  providers: [HotelBookingsService, HotelReservationsService],
+  providers: [
+    HotelBookingsService,
+    HotelBookingsScheduler,
+    HotelReservationsService,
+  ],
 
   exports: [HotelBookingsService, MongooseModule],
 })

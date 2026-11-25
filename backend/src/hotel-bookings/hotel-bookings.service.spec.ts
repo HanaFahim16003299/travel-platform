@@ -443,3 +443,75 @@ describe('HotelBookingsService.confirmBooking - notification (HTL-17)', () => {
     expect(notifications.create).toHaveBeenCalledTimes(1);
   });
 });
+
+// ==========================================
+// completeDeparted (HTL-23)
+// ==========================================
+
+describe('HotelBookingsService.completeDeparted', () => {
+  it('moves Confirmed bookings whose check-out has passed to Completed, in one updateMany', async () => {
+    const bookingModel = {
+      updateMany: vi.fn().mockResolvedValue({ modifiedCount: 3 }),
+    };
+    const service = new HotelBookingsService(
+      bookingModel as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      fakeNotifications() as any,
+    );
+
+    await service.completeDeparted();
+
+    expect(bookingModel.updateMany).toHaveBeenCalledTimes(1);
+    expect(bookingModel.updateMany).toHaveBeenCalledWith(
+      {
+        status: BookingStatus.Confirmed,
+        checkOut: { $lt: expect.any(Date) },
+      },
+      { $set: { status: BookingStatus.Completed } },
+    );
+  });
+});
+
+// ==========================================
+// cancel - Completed bookings stay ineligible (HTL-23 regression)
+// ==========================================
+
+describe('HotelBookingsService.cancel - Completed status regression', () => {
+  it('still refuses to cancel a Completed booking', async () => {
+    const booking: any = {
+      _id: BOOKING_ID,
+      userId: USER_ID,
+      status: BookingStatus.Completed,
+      checkIn: new Date('2020-01-02T00:00:00.000Z'),
+      save: vi.fn(),
+    };
+
+    const bookingModel = {
+      findOne: vi.fn().mockReturnValue(withSession(booking)),
+    };
+    const mongoSession = {
+      withTransaction: (fn: () => unknown) => fn(),
+      endSession: vi.fn(),
+    };
+    const connection = {
+      startSession: vi.fn().mockResolvedValue(mongoSession),
+    };
+
+    const service = new HotelBookingsService(
+      bookingModel as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      connection as any,
+      fakeNotifications() as any,
+    );
+
+    await expect(service.cancel(USER_ID, BOOKING_ID)).rejects.toThrow(
+      'This booking cannot be cancelled',
+    );
+    expect(booking.save).not.toHaveBeenCalled();
+  });
+});

@@ -712,6 +712,29 @@ export class HotelBookingsService {
   }
 
   // ==========================================
+  // HTL-23: COMPLETE CONFIRMED BOOKINGS AFTER CHECK-OUT
+  // Called by HotelBookingsScheduler
+  // ==========================================
+
+  async completeDeparted() {
+    const result = await this.bookingModel.updateMany(
+      {
+        status: BookingStatus.Confirmed,
+        checkOut: { $lt: new Date() },
+      },
+      {
+        $set: { status: BookingStatus.Completed },
+      },
+    );
+
+    if (result.modifiedCount) {
+      this.logger.log(`Completed ${result.modifiedCount} hotel booking(s)`);
+    }
+
+    return result;
+  }
+
+  // ==========================================
   // HELPER: CALCULATE REFUND PERCENTAGE
   // ==========================================
 
