@@ -568,7 +568,7 @@ export class HotelBookingsService {
       if (refundDoc) {
         const nextStatus =
           refundDoc.status === RefundStatus.Succeeded
-            ? 'Processed'
+            ? 'Refunded'
             : refundDoc.status === RefundStatus.Failed
               ? 'Failed'
               : 'Pending';
@@ -777,6 +777,10 @@ export class HotelBookingsService {
     if (String(booking.userId) !== user.id && user.role !== Role.Admin) {
       throw new ForbiddenException('You do not have access to this booking');
     }
+    const hotel = await this.hotelModel
+      .findById(booking.hotelId)
+      .select('name checkInTime checkOutTime')
+      .lean();
     return {
       bookingType: 'hotel',
       bookingId: String(booking._id),
@@ -784,6 +788,8 @@ export class HotelBookingsService {
       totalPrice: booking.totalPrice,
       currency: booking.currency,
       policyAcceptedAt: booking.policyAcceptedAt ?? null,
+      checkInTime: hotel?.checkInTime ?? null,
+      checkOutTime: hotel?.checkOutTime ?? null,
       policies: booking.policies,
     };
   }

@@ -151,7 +151,7 @@ refundPercent: number;
 // Refund status
 @Prop({
   type: String,
-  enum: ['Not Required', 'Pending', 'Processed', 'Failed'],
+  enum: ['Not Required', 'Pending', 'Processed', 'Refunded', 'Failed'],
   default: 'Not Required',
 })
 refundStatus: string;

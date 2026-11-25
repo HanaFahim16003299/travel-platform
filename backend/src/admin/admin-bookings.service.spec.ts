@@ -55,5 +55,22 @@ describe('AdminBookingsService', () => {
     expect(res.meta).toEqual({ total: 2, page: 1, limit: 10, totalPages: 1 });
     expect(res.data[0].bookingType).toBe(BookingType.Hotel);
     expect(res.data[1].bookingType).toBe(BookingType.Flight);
+    expect(res.data[1].reference).toBe('ABC123');
+    expect(res.data[0].dates).toHaveProperty('checkIn');
+
+    await service.listBookings({
+      page: 1,
+      limit: 10,
+      fromDate: '2026-11-01',
+      toDate: '2026-11-30',
+    });
+    expect(flightModel.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createdAt: expect.objectContaining({
+          $gte: expect.any(Date),
+          $lte: expect.any(Date),
+        }),
+      }),
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { buildMeta } from '../common/utils/pagination.js';
@@ -23,6 +23,20 @@ export class AdminBookingsService {
     if (q.status) filter.status = q.status;
     if (q.userId) filter.userId = new Types.ObjectId(q.userId);
 
+    if (q.fromDate || q.toDate) {
+      const createdAt: Record<string, Date> = {};
+      if (q.fromDate) createdAt.$gte = new Date(q.fromDate);
+      if (q.toDate) {
+        const end = new Date(q.toDate);
+        if (q.toDate.length <= 10) end.setUTCHours(23, 59, 59, 999);
+        createdAt.$lte = end;
+      }
+      if (createdAt.$gte && createdAt.$lte && createdAt.$gte > createdAt.$lte) {
+        throw new BadRequestException('fromDate must be before or equal to toDate');
+      }
+      filter.createdAt = createdAt;
+    }
+
     const includeFlights = !q.type || q.type === BookingType.Flight;
     const includeHotels = !q.type || q.type === BookingType.Hotel;
 
@@ -35,11 +49,16 @@ export class AdminBookingsService {
       ...flights.map((f) => ({
         id: String(f._id),
         bookingType: BookingType.Flight,
+        reference: f.bookingReference ?? null,
         userId: String(f.userId),
-        status: f.status,
-        totalPrice: f.totalPrice,
+        provider: f.segments?.[0]?.airlineId ? String(f.segments[0].airlineId) : null,
+        dates: {
+          departureAt: f.segments?.[0]?.departureAt ?? null,
+          arrivalAt: f.segments?.[f.segments.length - 1]?.arrivalAt ?? null,
+        },
+        amount: f.totalPrice,
         currency: f.currency,
-        bookingReference: f.bookingReference ?? null,
+        status: f.status,
         paymentId: f.paymentId ?? null,
         policyAcceptedAt: f.policyAcceptedAt ?? null,
         createdAt: f.createdAt ?? new Date(0),
@@ -48,11 +67,16 @@ export class AdminBookingsService {
       ...hotels.map((h) => ({
         id: String(h._id),
         bookingType: BookingType.Hotel,
+        reference: String(h._id),
         userId: String(h.userId),
-        status: h.status,
-        totalPrice: h.totalPrice,
+        provider: String(h.hotelId),
+        dates: {
+          checkIn: h.checkIn,
+          checkOut: h.checkOut,
+        },
+        amount: h.totalPrice,
         currency: h.currency,
-        hotelId: String(h.hotelId),
+        status: h.status,
         paymentId: h.paymentId ? String(h.paymentId) : null,
         policyAcceptedAt: h.policyAcceptedAt ?? null,
         createdAt: h.createdAt ?? new Date(0),

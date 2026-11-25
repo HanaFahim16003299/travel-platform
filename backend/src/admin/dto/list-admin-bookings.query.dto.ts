@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsMongoId, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsMongoId, IsOptional, IsString, Max, Min } from 'class-validator';
 import { BookingType } from '../../payments/enums/payment.enums.js';
 
 export class ListAdminBookingsQueryDto {
@@ -18,6 +18,16 @@ export class ListAdminBookingsQueryDto {
   @IsOptional()
   @IsMongoId()
   userId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter bookings created on or after this ISO date', example: '2026-11-01' })
+  @IsOptional()
+  @IsDateString()
+  fromDate?: string;
+
+  @ApiPropertyOptional({ description: 'Filter bookings created on or before this ISO date', example: '2026-11-30' })
+  @IsOptional()
+  @IsDateString()
+  toDate?: string;
 
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()
