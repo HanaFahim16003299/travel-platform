@@ -1,3 +1,94 @@
+feature/BLG-01-create-post
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-01, BLG-02, BLG-03, BLG-04, BLG-08, BLG-09
+Prompt:
+Asked Copilot to read the existing modules, then to implement Phase 1 of the
+blog module (post schema, DTOs, service, controller) using the workbook rules.
+How the output was used:
+Reviewed the generated post CRUD and used it as the base for the blog module.
+
+
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-05, BLG-06, BLG-07
+Prompt:
+Asked Copilot to implement Phase 2 of the blog module: comments (create, list,
+edit, delete with author-only rules) and likes (one like per user per post,
+unique compound index, 409 on duplicates, atomic counters).
+How the output was used:
+Reviewed the generated code and used it as the base for comments and likes.
+
+
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-08, BLG-12
+Prompt:
+Asked Copilot to implement Phase 3 of the blog module: GET /api/tags/:tag/posts
+and the public GET /api/authors/:id page, exposing only safe author fields.
+How the output was used:
+Reviewed the generated code and checked that no private user fields are
+returned. Public itineraries on the author page are left for when the
+itineraries module is merged.
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: GEN-07, GEN-09, GEN-10
+Prompt:
+Asked Copilot to implement Phase 4 of the blog module: content reports for
+posts and comments, admin report review (dismiss, hide, delete), direct content
+deletion, and audit and notification calls.
+How the output was used:
+Reviewed the generated code and used it as the base for moderation.
+
+
+
+Date: 2026-11-23
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-01 to BLG-12, GEN-07, GEN-09, GEN-10
+Prompt:
+Asked Copilot to review the blog code against the workbook (review only), then
+to fix two GEN-10 items: default open reports for the admin list and
+author/admin access to their own hidden or draft posts and comments.
+How the output was used:
+Used the review table to separate real gaps from items waiting on teammates'
+modules. Reviewed and tested the generated fixes.
+
+
+
+Date: 2026-11-23
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: GEN-07
+Prompt:
+Asked Copilot to route audit and notification calls through one adapter file,
+first against temporary stubs and then against the merged shared services.
+How the output was used:
+Only blog-integrations.ts and blog.module.ts changed when the real services
+were merged.
+
+
+
+Date: 2026-11-23
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-10, GEN-08
+Prompt:
+Asked Copilot to implement post images using the shared upload code: author-only
+upload and delete, JPG/PNG only, 5 MB, maximum 5 images per post, and cleanup of
+files that fail validation or belong to deleted posts.
+How the output was used:
+Reviewed the generated code and tested uploads, rejections and deletion in
+Swagger.
+
 //mohamed hesham prompts:
 Task: remove the `currency` field from the Hotel module in backend/src/hotels/.
 
@@ -100,3 +191,4 @@ Verify before you report (run them, do not assume):
    - confirm the free-room aggregation filters on real Types.ObjectId values for hotelId.
 
 Report: files changed (short diff summary), the exact output of every check, and anything you decided that is not written above. Leave no scratch files; git status must show only intended files (my existing uncommitted changes in other files are expected).
+ develop

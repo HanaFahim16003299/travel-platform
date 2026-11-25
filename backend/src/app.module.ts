@@ -10,6 +10,7 @@ import { FlightsModule } from './flights/flights.module.js';
 import { FlightBookingsModule } from './flight-bookings/flight-bookings.module.js';
 import { HotelsModule } from './hotels/hotels.module.js';
 import { HotelBookingsModule } from './hotel-bookings/hotel-bookings.module.js';
+import { ReviewsModule } from './reviews/reviews.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
 import { ItinerariesModule } from './itineraries/itineraries.module.js';
 import { BlogModule } from './blog/blog.module.js';
@@ -39,6 +40,7 @@ import { AdminAccountsModule } from './admin/admin-accounts.module.js';
     FlightBookingsModule,
     HotelsModule,
     HotelBookingsModule,
+    ReviewsModule,
     PaymentsModule,
     ItinerariesModule,
     BlogModule,
