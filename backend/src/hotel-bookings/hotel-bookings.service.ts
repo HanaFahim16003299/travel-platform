@@ -83,22 +83,33 @@ export class HotelBookingsService {
     assertNotInPast(nights[0]);
 
     // Validate selected rooms
-    if (!Array.isArray(dto.roomIds) || dto.roomIds.length === 0) {
+    if (!Array.isArray(dto.rooms) || dto.rooms.length === 0) {
       throw new BadRequestException('At least one room must be selected');
     }
 
-    // Validate and normalize room IDs
-    const roomIds = dto.roomIds.map((id) => this.validateId(id, 'room'));
+    // Validate and normalize room selections
+    const roomSelections = dto.rooms.map((selection) => ({
+      roomId: this.validateId(selection.roomId, 'room'),
+      adults: selection.adults,
+      childrenAges: selection.childrenAges,
+    }));
+
+    const roomIds = roomSelections.map((selection) => selection.roomId);
 
     // Prevent duplicate room selection
     if (new Set(roomIds).size !== roomIds.length) {
       throw new BadRequestException('Duplicate room IDs are not allowed');
     }
 
-    // Validate number of guests
-    if (!Number.isInteger(dto.guests) || dto.guests < 1) {
+    // At least one adult is required across the whole reservation
+    const totalAdults = roomSelections.reduce(
+      (sum, selection) => sum + selection.adults,
+      0,
+    );
+
+    if (totalAdults < 1) {
       throw new BadRequestException(
-        'Number of guests must be a positive integer',
+        'At least one adult is required across the reservation',
       );
     }
 
@@ -134,17 +145,29 @@ export class HotelBookingsService {
           );
         }
 
-        // Calculate total room capacity
-        const totalCapacity = rooms.reduce(
-          (sum, room) => sum + room.maxAdults + room.maxChildren,
-          0,
+        const roomsById = new Map(
+          rooms.map((room) => [String(room._id), room]),
         );
 
-        if (dto.guests > totalCapacity) {
-          throw new BadRequestException(
-            'Selected rooms do not have enough capacity',
-          );
+        // No room's guests may exceed its maximum occupancy
+        for (const selection of roomSelections) {
+          const room = roomsById.get(selection.roomId)!;
+          const occupancy = selection.adults + selection.childrenAges.length;
+          const maxOccupancy = room.maxAdults + room.maxChildren;
+
+          if (occupancy > maxOccupancy) {
+            throw new BadRequestException(
+              `Room "${room.name}" cannot hold ${occupancy} guest(s) (maximum ${maxOccupancy})`,
+            );
+          }
         }
+
+        // Guests is the derived total across every room
+        const guests = roomSelections.reduce(
+          (sum, selection) =>
+            sum + selection.adults + selection.childrenAges.length,
+          0,
+        );
 
         // Calculate total price using integer cents
         const nightlyPriceInCents = rooms.reduce(
@@ -172,16 +195,21 @@ export class HotelBookingsService {
           userId: userObjectId,
           hotelId,
 
-          rooms: rooms.map((room) => ({
-            roomId: room._id,
-            roomName: room.name,
-            pricePerNight: room.pricePerNight,
-          })),
+          rooms: roomSelections.map((selection) => {
+            const room = roomsById.get(selection.roomId)!;
+            return {
+              roomId: room._id,
+              roomName: room.name,
+              pricePerNight: room.pricePerNight,
+              adults: selection.adults,
+              childrenAges: selection.childrenAges,
+            };
+          }),
 
           checkIn,
           checkOut,
           nights: nights.length,
-          guests: dto.guests,
+          guests,
 
           totalPrice,
           currency: 'USD',

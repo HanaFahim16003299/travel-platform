@@ -94,6 +94,22 @@ function buildService(options: BuildServiceOptions = {}) {
   };
 }
 
+function futureDateString(daysFromNow: number): string {
+  return new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function createDto(overrides: Record<string, unknown> = {}) {
+  return {
+    hotelId: HOTEL_ID,
+    checkIn: futureDateString(1),
+    checkOut: futureDateString(2),
+    rooms: [{ roomId: ROOM_ID, adults: 2, childrenAges: [] }],
+    ...overrides,
+  } as any;
+}
+
 describe('HotelBookingsService.create - hold duration (HTL-18)', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -106,16 +122,108 @@ describe('HotelBookingsService.create - hold duration (HTL-18)', () => {
 
     const { service, savedDocs } = buildService({ modifiedCount: 1 });
 
-    await service.create(USER_ID, {
-      hotelId: HOTEL_ID,
-      roomIds: [ROOM_ID],
-      checkIn: '2026-01-02',
-      checkOut: '2026-01-03',
-      guests: 2,
-    } as any);
+    await service.create(USER_ID, createDto());
 
     const expected = new Date(now.getTime() + HOTEL_HOLD_MINUTES * 60 * 1000);
     expect(savedDocs[0].expiresAt).toEqual(expected);
+  });
+});
+
+describe('HotelBookingsService.create - adults and children per room (HTL-16)', () => {
+  it('stores adults/childrenAges per room and derives guests as their sum', async () => {
+    const { service, savedDocs } = buildService({
+      modifiedCount: 1,
+      rooms: [
+        {
+          _id: ROOM_ID,
+          name: 'Deluxe',
+          pricePerNight: 100,
+          maxAdults: 2,
+          maxChildren: 2,
+        },
+      ],
+    });
+
+    await service.create(
+      USER_ID,
+      createDto({
+        rooms: [{ roomId: ROOM_ID, adults: 2, childrenAges: [5, 9] }],
+      }),
+    );
+
+    expect(savedDocs[0].guests).toBe(4);
+    expect(savedDocs[0].rooms).toEqual([
+      expect.objectContaining({
+        roomId: ROOM_ID,
+        adults: 2,
+        childrenAges: [5, 9],
+      }),
+    ]);
+  });
+
+  it('rejects when there is no adult across the whole reservation', async () => {
+    const { service } = buildService();
+
+    await expect(
+      service.create(
+        USER_ID,
+        createDto({
+          rooms: [{ roomId: ROOM_ID, adults: 0, childrenAges: [5] }],
+        }),
+      ),
+    ).rejects.toThrow(/at least one adult/i);
+  });
+
+  it('rejects a duplicated roomId', async () => {
+    const { service } = buildService();
+
+    await expect(
+      service.create(
+        USER_ID,
+        createDto({
+          rooms: [
+            { roomId: ROOM_ID, adults: 1, childrenAges: [] },
+            { roomId: ROOM_ID, adults: 1, childrenAges: [] },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/duplicate room ids/i);
+  });
+
+  it('rejects a room whose adults + children exceed its maxAdults + maxChildren', async () => {
+    const { service } = buildService({
+      rooms: [
+        {
+          _id: ROOM_ID,
+          name: 'Deluxe',
+          pricePerNight: 100,
+          maxAdults: 2,
+          maxChildren: 1,
+        },
+      ],
+    });
+
+    await expect(
+      service.create(
+        USER_ID,
+        createDto({
+          rooms: [{ roomId: ROOM_ID, adults: 2, childrenAges: [5, 9] }],
+        }),
+      ),
+    ).rejects.toThrow(/cannot hold 4 guest/i);
+  });
+
+  it('rejects a room that does not belong to the hotel or is inactive', async () => {
+    const { service } = buildService({ rooms: [] });
+
+    await expect(
+      service.create(
+        USER_ID,
+        createDto({
+          rooms: [{ roomId: ROOM_ID, adults: 1, childrenAges: [] }],
+        }),
+      ),
+    ).rejects.toThrow(/invalid or inactive/i);
   });
 });
 

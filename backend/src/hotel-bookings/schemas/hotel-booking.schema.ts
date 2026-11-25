@@ -27,6 +27,14 @@ export class BookedRoom {
 
   @Prop({ required: true, min: 0 })
   pricePerNight: number;
+
+  // Adults assigned to this room (HTL-16)
+  @Prop({ required: true, min: 0 })
+  adults: number;
+
+  // Ages (0-17) of the children assigned to this room (HTL-16)
+  @Prop({ type: [Number], default: [] })
+  childrenAges: number[];
 }
 
 export const BookedRoomSchema = SchemaFactory.createForClass(BookedRoom);
