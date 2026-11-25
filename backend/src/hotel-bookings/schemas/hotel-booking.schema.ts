@@ -1,19 +1,13 @@
-
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
+import { Schema as MongooseSchema, Types } from 'mongoose';
 import type { HydratedDocument } from 'mongoose';
-import {
-  HotelPoliciesSchema,
-} from '../../hotels/schemas/hotel.schema.js';
+import { HotelPoliciesSchema } from '../../hotels/schemas/hotel.schema.js';
 
-import type {
-  HotelPolicies,
-} from '../../hotels/schemas/hotel.schema.js';
+import type { HotelPolicies } from '../../hotels/schemas/hotel.schema.js';
 
 import { BookingStatus } from '../enums/booking-status.enum.js';
 
-export type HotelBookingDocument =
-  HydratedDocument<HotelBooking>;
+export type HotelBookingDocument = HydratedDocument<HotelBooking>;
 
 // ==========================================
 // BOOKED ROOM SUB-SCHEMA
@@ -22,7 +16,7 @@ export type HotelBookingDocument =
 @Schema({ _id: false })
 export class BookedRoom {
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'Room',
     required: true,
   })
@@ -35,8 +29,7 @@ export class BookedRoom {
   pricePerNight: number;
 }
 
-export const BookedRoomSchema =
-  SchemaFactory.createForClass(BookedRoom);
+export const BookedRoomSchema = SchemaFactory.createForClass(BookedRoom);
 
 // ==========================================
 // HOTEL BOOKING SCHEMA
@@ -46,7 +39,7 @@ export const BookedRoomSchema =
 export class HotelBooking {
   // Booking owner
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'User',
     required: true,
   })
@@ -54,7 +47,7 @@ export class HotelBooking {
 
   // Selected hotel
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'Hotel',
     required: true,
   })
@@ -114,7 +107,7 @@ export class HotelBooking {
 
   // Payment integration
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'Payment',
     default: null,
   })
@@ -137,36 +130,35 @@ export class HotelBooking {
   confirmedAt: Date | null;
 
   // Cancellation timestamp
-@Prop({ type: Date, default: null })
-cancelledAt: Date | null;
+  @Prop({ type: Date, default: null })
+  cancelledAt: Date | null;
 
-// Refund amount
-@Prop({ type: Number, default: 0, min: 0 })
-refundAmount: number;
+  // Refund amount
+  @Prop({ type: Number, default: 0, min: 0 })
+  refundAmount: number;
 
-// Refund percentage
-@Prop({ type: Number, default: 0, min: 0, max: 100 })
-refundPercent: number;
+  // Refund percentage
+  @Prop({ type: Number, default: 0, min: 0, max: 100 })
+  refundPercent: number;
 
-// Refund status
-@Prop({
-  type: String,
-  enum: ['Not Required', 'Pending', 'Processed', 'Failed'],
-  default: 'Not Required',
-})
-refundStatus: string;
+  // Refund status
+  @Prop({
+    type: String,
+    enum: ['Not Required', 'Pending', 'Processed', 'Failed'],
+    default: 'Not Required',
+  })
+  refundStatus: string;
 
-// Refund request timestamp
-@Prop({ type: Date, default: null })
-refundRequestedAt: Date | null;
+  // Refund request timestamp
+  @Prop({ type: Date, default: null })
+  refundRequestedAt: Date | null;
 
-// Automatically managed by Mongoose
-createdAt: Date;
-updatedAt: Date;
+  // Automatically managed by Mongoose
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-export const HotelBookingSchema =
-  SchemaFactory.createForClass(HotelBooking);
+export const HotelBookingSchema = SchemaFactory.createForClass(HotelBooking);
 
 // ==========================================
 // DATABASE INDEXES
