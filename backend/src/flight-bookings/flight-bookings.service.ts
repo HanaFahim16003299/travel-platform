@@ -2,17 +2,18 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  forwardRef,
   HttpException,
-  Inject,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import { BookingGatewayRegistry } from '../payments/booking-gateway.registry.js';
 import { BookingType } from '../payments/enums/payment.enums.js';
 import { PaymentsService } from '../payments/payments.service.js';
+import { RefundsService } from '../payments/refunds.service.js';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import { randomBytes } from 'node:crypto';
@@ -61,7 +62,7 @@ interface LoadedLeg {
 }
 
 @Injectable()
-export class FlightBookingsService {
+export class FlightBookingsService implements OnModuleInit {
   private readonly logger = new Logger(FlightBookingsService.name);
 
   constructor(
@@ -73,10 +74,21 @@ export class FlightBookingsService {
     private readonly airlineModel: Model<AirlineDocument>,
     private readonly flightsService: FlightsService,
     private readonly notifications: NotificationsService,
-    @Optional()
-    @Inject(forwardRef(() => PaymentsService))
-    private readonly paymentsService?: PaymentsService,
+    @Optional() private readonly paymentsService?: PaymentsService,
+    @Optional() private readonly refundsService?: RefundsService,
+    @Optional() private readonly gatewayRegistry?: BookingGatewayRegistry,
   ) {}
+
+  onModuleInit() {
+    this.gatewayRegistry?.register(BookingType.Flight, {
+      getPolicies: (user, id) => this.getPolicies(user, id),
+      acceptPolicies: (user, id) => this.acceptPolicies(user, id),
+      getPayableBooking: (id) => this.getPayableBooking(id),
+      confirmAfterPayment: async (id, paymentId) =>
+        (await this.confirmAfterPayment(id, paymentId)) !== null,
+      expireIfDue: (id) => this.expireIfDue(id),
+    });
+  }
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -573,8 +585,8 @@ export class FlightBookingsService {
     if (!cancelled) throw new ConflictException('Booking is no longer confirmed');
 
     await this.releaseSegments(cancelled.segments, cancelled.seatCount);
-    if (quote.refundAmount > 0 && this.paymentsService) {
-      const refund = await this.paymentsService.processRefundForBooking({
+    if (quote.refundAmount > 0 && this.refundsService) {
+      const refund = await this.refundsService.processRefundForBooking({
         bookingType: BookingType.Flight,
         bookingId: cancelled.id as string,
         userId: String(cancelled.userId),
@@ -618,8 +630,8 @@ export class FlightBookingsService {
       );
       if (!c) continue;
       await this.releaseSegments(c.segments, c.seatCount);
-      if (c.totalPrice > 0 && this.paymentsService) {
-        const refund = await this.paymentsService.processRefundForBooking({
+      if (c.totalPrice > 0 && this.refundsService) {
+        const refund = await this.refundsService.processRefundForBooking({
           bookingType: BookingType.Flight,
           bookingId: c.id as string,
           userId: String(c.userId),

@@ -1,4 +1,4 @@
-import { forwardRef, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { FlightsModule } from '../flights/flights.module.js';
 import { PaymentsModule } from '../payments/payments.module.js';
@@ -14,7 +14,7 @@ import { FlightBooking, FlightBookingSchema } from './schemas/flight-booking.sch
     // Gives us FlightsService.reserveSeats plus the Flight and Airline models.
     // NotificationsModule and AuthModule are @Global, so no import is needed for them.
     FlightsModule,
-    forwardRef(() => PaymentsModule),
+    PaymentsModule,
   ],
   controllers: [FlightBookingsController],
   providers: [FlightBookingsService, FlightBookingsScheduler, ETicketService],

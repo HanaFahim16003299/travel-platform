@@ -2,8 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  forwardRef,
-  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -15,21 +13,15 @@ import { isValidObjectId, Model, Types } from 'mongoose';
 import Stripe from 'stripe';
 import type { AuthUser } from '../auth/decorators.js';
 import { Role } from '../common/enums/index.js';
-import { FlightBookingsService } from '../flight-bookings/flight-bookings.service.js';
-import { HotelBookingsService } from '../hotel-bookings/hotel-bookings.service.js';
 import { NotificationType } from '../notifications/notification-types.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { BookingGatewayRegistry } from './booking-gateway.registry.js';
 import { CreatePaymentDto } from './dto/create-payment.dto.js';
-import { BookingType, PaymentStatus, RefundStatus } from './enums/payment.enums.js';
+import { BookingType, PaymentStatus } from './enums/payment.enums.js';
+import { RefundsService } from './refunds.service.js';
 import { Payment } from './schemas/payment.schema.js';
 import type { PaymentDocument } from './schemas/payment.schema.js';
-import { Refund } from './schemas/refund.schema.js';
-import type { RefundDocument } from './schemas/refund.schema.js';
-
-const ZERO_DECIMAL_CURRENCIES = new Set([
-  'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW',
-  'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
-]);
+import { toMinorUnits } from './utils/currency.util.js';
 
 @Injectable()
 export class PaymentsService {
@@ -40,12 +32,8 @@ export class PaymentsService {
   constructor(
     @InjectModel(Payment.name)
     private readonly paymentModel: Model<PaymentDocument>,
-    @InjectModel(Refund.name)
-    private readonly refundModel: Model<RefundDocument>,
-    @Inject(forwardRef(() => FlightBookingsService))
-    private readonly flightBookingsService: FlightBookingsService,
-    @Inject(forwardRef(() => HotelBookingsService))
-    private readonly hotelBookingsService: HotelBookingsService,
+    private readonly gatewayRegistry: BookingGatewayRegistry,
+    private readonly refundsService: RefundsService,
     private readonly notificationsService: NotificationsService,
     private readonly configService: ConfigService,
   ) {
@@ -61,11 +49,6 @@ export class PaymentsService {
     return this.stripe;
   }
 
-  private toMinorUnits(amount: number, currency: string): number {
-    const code = currency.toUpperCase();
-    return ZERO_DECIMAL_CURRENCIES.has(code) ? Math.round(amount) : Math.round(amount * 100);
-  }
-
   private validateObjectId(id: string, label = 'ID'): Types.ObjectId {
     if (!isValidObjectId(id)) {
       throw new BadRequestException(`Invalid ${label}`);
@@ -73,38 +56,10 @@ export class PaymentsService {
     return new Types.ObjectId(id);
   }
 
-  // ---------------------------------------------------------------------------
-  // PAY-02: Policy display & acceptance
-  // ---------------------------------------------------------------------------
-
-  getBookingPolicies(user: AuthUser, type: BookingType, bookingId: string) {
-    if (type === BookingType.Flight) {
-      return this.flightBookingsService.getPolicies(user, bookingId);
-    }
-    return this.hotelBookingsService.getPolicies(user, bookingId);
-  }
-
-  acceptBookingPolicies(user: AuthUser, type: BookingType, bookingId: string) {
-    if (type === BookingType.Flight) {
-      return this.flightBookingsService.acceptPolicies(user, bookingId);
-    }
-    return this.hotelBookingsService.acceptPolicies(user, bookingId);
-  }
-
-  // ---------------------------------------------------------------------------
-  // PAY-01: Stripe payment creation, retry, inspection, and webhook
-  // ---------------------------------------------------------------------------
-
-  private getPayableBooking(type: BookingType, bookingId: string) {
-    if (type === BookingType.Flight) {
-      return this.flightBookingsService.getPayableBooking(bookingId);
-    }
-    return this.hotelBookingsService.getPayableBooking(bookingId);
-  }
-
   async createPayment(user: AuthUser, dto: CreatePaymentDto) {
     const bookingObjectId = this.validateObjectId(dto.bookingId, 'booking ID');
-    const payable = await this.getPayableBooking(dto.bookingType, dto.bookingId);
+    const gateway = this.gatewayRegistry.get(dto.bookingType);
+    const payable = await gateway.getPayableBooking(dto.bookingId);
 
     if (payable.userId !== user.id) {
       throw new ForbiddenException('You do not have access to this booking');
@@ -142,7 +97,7 @@ export class PaymentsService {
     });
 
     const intent = await stripe.paymentIntents.create({
-      amount: this.toMinorUnits(payable.amount, payable.currency),
+      amount: toMinorUnits(payable.amount, payable.currency),
       currency: payable.currency.toLowerCase(),
       automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
       metadata: {
@@ -168,17 +123,12 @@ export class PaymentsService {
     if (String(payment.userId) !== user.id) {
       throw new ForbiddenException('You do not have access to this payment');
     }
-    if (
-      payment.status !== PaymentStatus.Failed &&
-      payment.status !== PaymentStatus.Pending
-    ) {
+    if (payment.status !== PaymentStatus.Failed && payment.status !== PaymentStatus.Pending) {
       throw new ConflictException(`Cannot retry a payment with status ${payment.status}`);
     }
 
-    const payable = await this.getPayableBooking(
-      payment.bookingType,
-      String(payment.bookingId),
-    );
+    const gateway = this.gatewayRegistry.get(payment.bookingType);
+    const payable = await gateway.getPayableBooking(String(payment.bookingId));
     if (!payable.policyAcceptedAt) {
       throw new ConflictException('Provider policies must be accepted before payment');
     }
@@ -194,7 +144,7 @@ export class PaymentsService {
     }
 
     const intent = await stripe.paymentIntents.create({
-      amount: this.toMinorUnits(payable.amount, payable.currency),
+      amount: toMinorUnits(payable.amount, payable.currency),
       currency: payable.currency.toLowerCase(),
       automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
       metadata: {
@@ -257,154 +207,6 @@ export class PaymentsService {
     return { received: true, eventType: event.type };
   }
 
-  private async onPaymentSucceeded(intent: Stripe.PaymentIntent) {
-    const payment = await this.paymentModel.findOne({ stripePaymentIntentId: intent.id });
-    if (!payment) {
-      this.logger.warn(`No payment record found for PaymentIntent ${intent.id}`);
-      return;
-    }
-
-    if (payment.status === PaymentStatus.Succeeded) {
-      return; // Idempotent webhook handling
-    }
-
-    payment.status = PaymentStatus.Succeeded;
-    payment.paidAt = new Date();
-    payment.failureReason = undefined;
-    await payment.save();
-
-    const bookingId = String(payment.bookingId);
-    let confirmed = false;
-
-    if (payment.bookingType === BookingType.Flight) {
-      const result = await this.flightBookingsService.confirmAfterPayment(
-        bookingId,
-        String(payment._id),
-      );
-      confirmed = result !== null;
-    } else {
-      try {
-        await this.hotelBookingsService.confirmBooking(bookingId, String(payment._id));
-        confirmed = true;
-      } catch (err) {
-        this.logger.warn(
-          `Hotel booking ${bookingId} could not be confirmed after payment: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        confirmed = false;
-      }
-    }
-
-    if (confirmed) {
-      await this.notificationsService.create({
-        userId: String(payment.userId),
-        type: NotificationType.PaymentUpdate,
-        title: 'Payment succeeded',
-        message: `Your payment of ${payment.amount} ${payment.currency} was verified and your booking is confirmed.`,
-        referenceType: payment.bookingType === BookingType.Flight ? 'flight_booking' : 'hotel_booking',
-        referenceId: bookingId,
-      });
-      return;
-    }
-
-    // Hold expired before webhook arrived: refund automatically so user is not charged
-    await this.issueExpiredHoldRefund(payment, intent.id);
-  }
-
-  private async issueExpiredHoldRefund(payment: PaymentDocument, intentId: string) {
-    const stripe = this.getStripe();
-    const refundDoc = new this.refundModel({
-      userId: payment.userId,
-      paymentId: payment._id,
-      bookingType: payment.bookingType,
-      bookingId: payment.bookingId,
-      amount: payment.amount,
-      currency: payment.currency,
-      reason: 'Booking hold expired before payment confirmation',
-      status: RefundStatus.Pending,
-    });
-
-    try {
-      const stripeRefund = await stripe.refunds.create({ payment_intent: intentId });
-      refundDoc.stripeRefundId = stripeRefund.id;
-      refundDoc.status = RefundStatus.Succeeded;
-      refundDoc.processedAt = new Date();
-      payment.status = PaymentStatus.Refunded;
-      await payment.save();
-    } catch (err) {
-      refundDoc.status = RefundStatus.Failed;
-      refundDoc.failureReason = err instanceof Error ? err.message : 'Stripe refund failed';
-    }
-    await refundDoc.save();
-
-    await this.notificationsService.create({
-      userId: String(payment.userId),
-      type: NotificationType.RefundUpdate,
-      title: 'Booking hold expired — automatic refund',
-      message: `Your hold for ${payment.bookingType} booking expired before payment completed, so a full refund of ${payment.amount} ${payment.currency} was initiated.`,
-      referenceType: 'refund',
-      referenceId: String(refundDoc._id),
-    });
-  }
-
-  private async onPaymentFailed(intent: Stripe.PaymentIntent) {
-    const payment = await this.paymentModel.findOne({ stripePaymentIntentId: intent.id });
-    if (!payment || payment.status === PaymentStatus.Succeeded) return;
-
-    payment.status = PaymentStatus.Failed;
-    payment.failureReason = intent.last_payment_error?.message ?? 'Payment failed';
-    await payment.save();
-
-    await this.releaseExpiredBookingInventory(payment.bookingType, String(payment.bookingId));
-
-    await this.notificationsService.create({
-      userId: String(payment.userId),
-      type: NotificationType.PaymentUpdate,
-      title: 'Payment failed',
-      message: `Your payment of ${payment.amount} ${payment.currency} failed: ${payment.failureReason}`,
-      referenceType: 'payment',
-      referenceId: String(payment._id),
-    });
-  }
-
-  private async onPaymentCanceled(intent: Stripe.PaymentIntent) {
-    const payment = await this.paymentModel.findOne({ stripePaymentIntentId: intent.id });
-    if (!payment || payment.status === PaymentStatus.Succeeded) return;
-
-    payment.status = PaymentStatus.Cancelled;
-    payment.cancelledAt = new Date();
-    await payment.save();
-
-    await this.releaseExpiredBookingInventory(payment.bookingType, String(payment.bookingId));
-  }
-
-  private async releaseExpiredBookingInventory(bookingType: BookingType, bookingId: string) {
-    try {
-      if (bookingType === BookingType.Flight) {
-        await this.flightBookingsService.expireIfDue(bookingId);
-      } else {
-        await this.hotelBookingsService.expireBooking(bookingId);
-      }
-    } catch {
-      // Booking may still be within its active hold window or already released
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // PAY-03: Refunds & PaymentIntent cancellation (called by booking services)
-  // ---------------------------------------------------------------------------
-
-  async getRefund(user: AuthUser, id: string) {
-    const refundId = this.validateObjectId(id, 'refund ID');
-    const refund = await this.refundModel.findById(refundId).lean();
-    if (!refund) {
-      throw new NotFoundException('Refund not found');
-    }
-    if (String(refund.userId) !== user.id && user.role !== Role.Admin) {
-      throw new ForbiddenException('You do not have access to this refund');
-    }
-    return refund;
-  }
-
   async cancelPendingPaymentForBooking(bookingType: BookingType, bookingId: string) {
     if (!isValidObjectId(bookingId)) return;
     const payment = await this.paymentModel.findOne({
@@ -429,75 +231,77 @@ export class PaymentsService {
     await payment.save();
   }
 
-  async processRefundForBooking(input: {
-    bookingType: BookingType;
-    bookingId: string;
-    userId: string;
-    amount: number;
-    currency: string;
-    reason?: string;
-  }) {
-    if (input.amount <= 0) return null;
-
-    const bookingObjectId = this.validateObjectId(input.bookingId, 'booking ID');
-    const payment = await this.paymentModel.findOne({
-      bookingType: input.bookingType,
-      bookingId: bookingObjectId,
-      status: { $in: [PaymentStatus.Succeeded, PaymentStatus.PartiallyRefunded] },
-    });
-
-    if (!payment || !payment.stripePaymentIntentId) {
-      this.logger.warn(
-        `No succeeded payment found for ${input.bookingType} booking ${input.bookingId}; skipping Stripe refund`,
-      );
-      return null;
+  private async onPaymentSucceeded(intent: Stripe.PaymentIntent) {
+    const payment = await this.paymentModel.findOne({ stripePaymentIntentId: intent.id });
+    if (!payment) {
+      this.logger.warn(`No payment record found for PaymentIntent ${intent.id}`);
+      return;
     }
 
-    const refundDoc = new this.refundModel({
-      userId: new Types.ObjectId(input.userId),
-      paymentId: payment._id,
-      bookingType: input.bookingType,
-      bookingId: bookingObjectId,
-      amount: input.amount,
-      currency: input.currency.toUpperCase(),
-      reason: input.reason,
-      status: RefundStatus.Pending,
-    });
+    if (payment.status === PaymentStatus.Succeeded) {
+      return;
+    }
 
-    try {
-      const stripe = this.getStripe();
-      const stripeRefund = await stripe.refunds.create({
-        payment_intent: payment.stripePaymentIntentId,
-        amount: this.toMinorUnits(input.amount, input.currency),
+    payment.status = PaymentStatus.Succeeded;
+    payment.paidAt = new Date();
+    payment.failureReason = undefined;
+    await payment.save();
+
+    const bookingId = String(payment.bookingId);
+    const gateway = this.gatewayRegistry.get(payment.bookingType);
+    const confirmed = await gateway.confirmAfterPayment(bookingId, String(payment._id));
+
+    if (confirmed) {
+      await this.notificationsService.create({
+        userId: String(payment.userId),
+        type: NotificationType.PaymentUpdate,
+        title: 'Payment succeeded',
+        message: `Your payment of ${payment.amount} ${payment.currency} was verified and your booking is confirmed.`,
+        referenceType: payment.bookingType === BookingType.Flight ? 'flight_booking' : 'hotel_booking',
+        referenceId: bookingId,
       });
-      refundDoc.stripeRefundId = stripeRefund.id;
-      refundDoc.status = RefundStatus.Succeeded;
-      refundDoc.processedAt = new Date();
-
-      payment.status =
-        input.amount >= payment.amount
-          ? PaymentStatus.Refunded
-          : PaymentStatus.PartiallyRefunded;
-      await payment.save();
-    } catch (err) {
-      refundDoc.status = RefundStatus.Failed;
-      refundDoc.failureReason = err instanceof Error ? err.message : 'Stripe refund failed';
+      return;
     }
 
-    await refundDoc.save();
+    await this.refundsService.issueExpiredHoldRefund(payment, intent.id);
+  }
+
+  private async onPaymentFailed(intent: Stripe.PaymentIntent) {
+    const payment = await this.paymentModel.findOne({ stripePaymentIntentId: intent.id });
+    if (!payment || payment.status === PaymentStatus.Succeeded) return;
+
+    payment.status = PaymentStatus.Failed;
+    payment.failureReason = intent.last_payment_error?.message ?? 'Payment failed';
+    await payment.save();
+
+    await this.releaseExpiredInventory(payment.bookingType, String(payment.bookingId));
 
     await this.notificationsService.create({
-      userId: input.userId,
-      type: NotificationType.RefundUpdate,
-      title: refundDoc.status === RefundStatus.Succeeded ? 'Refund processed' : 'Refund failed',
-      message:
-        refundDoc.status === RefundStatus.Succeeded
-          ? `Your refund of ${input.amount} ${input.currency.toUpperCase()} has been processed.`
-          : `Your refund of ${input.amount} ${input.currency.toUpperCase()} could not be processed automatically.`,
-      referenceType: 'refund',
-      referenceId: String(refundDoc._id),
+      userId: String(payment.userId),
+      type: NotificationType.PaymentUpdate,
+      title: 'Payment failed',
+      message: `Your payment of ${payment.amount} ${payment.currency} failed: ${payment.failureReason}`,
+      referenceType: 'payment',
+      referenceId: String(payment._id),
     });
+  }
 
-    return refundDoc;
+  private async onPaymentCanceled(intent: Stripe.PaymentIntent) {
+    const payment = await this.paymentModel.findOne({ stripePaymentIntentId: intent.id });
+    if (!payment || payment.status === PaymentStatus.Succeeded) return;
+
+    payment.status = PaymentStatus.Cancelled;
+    payment.cancelledAt = new Date();
+    await payment.save();
+
+    await this.releaseExpiredInventory(payment.bookingType, String(payment.bookingId));
+  }
+
+  private async releaseExpiredInventory(bookingType: BookingType, bookingId: string) {
+    try {
+      await this.gatewayRegistry.get(bookingType).expireIfDue(bookingId);
+    } catch {
+      // Booking may still be within its active hold window or already released
+    }
   }
 }

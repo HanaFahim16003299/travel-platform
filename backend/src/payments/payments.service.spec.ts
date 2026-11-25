@@ -3,8 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Role } from '../common/enums/index.js';
+import { BookingGatewayRegistry } from './booking-gateway.registry.js';
+import type { BookingPaymentGateway } from './booking-gateway.registry.js';
 import { BookingType, PaymentStatus, RefundStatus } from './enums/payment.enums.js';
 import { PaymentsService } from './payments.service.js';
+import { RefundsService } from './refunds.service.js';
 
 const USER_ID = new Types.ObjectId().toHexString();
 const OTHER_USER_ID = new Types.ObjectId().toHexString();
@@ -16,12 +19,16 @@ const user = { id: USER_ID, email: 'yusuf@example.com', role: Role.User };
 const otherUser = { id: OTHER_USER_ID, email: 'other@example.com', role: Role.User };
 const adminUser = { id: OTHER_USER_ID, email: 'admin@example.com', role: Role.Admin };
 
-describe('PaymentsService', () => {
-  let service: PaymentsService;
+describe('PaymentsService & RefundsService', () => {
+  let paymentsService: PaymentsService;
+  let refundsService: RefundsService;
+  let gatewayRegistry: BookingGatewayRegistry;
+  let flightGateway: BookingPaymentGateway & Record<string, ReturnType<typeof vi.fn>>;
+  let hotelGateway: BookingPaymentGateway & Record<string, ReturnType<typeof vi.fn>>;
+  let flightConfirmAfterPaymentMock: ReturnType<typeof vi.fn>;
+  let hotelExpireIfDueMock: ReturnType<typeof vi.fn>;
   let paymentModel: any;
   let refundModel: any;
-  let flightBookingsService: any;
-  let hotelBookingsService: any;
   let notificationsService: any;
   let stripeMock: any;
 
@@ -47,20 +54,28 @@ describe('PaymentsService', () => {
     });
     refundModel.findById = vi.fn();
 
-    flightBookingsService = {
+    flightConfirmAfterPaymentMock = vi.fn();
+    hotelExpireIfDueMock = vi.fn();
+
+    flightGateway = {
+      getPolicies: vi.fn(),
+      acceptPolicies: vi.fn(),
+      getPayableBooking: vi.fn(),
+      confirmAfterPayment: flightConfirmAfterPaymentMock as any,
+      expireIfDue: vi.fn(),
+    };
+    hotelGateway = {
       getPolicies: vi.fn(),
       acceptPolicies: vi.fn(),
       getPayableBooking: vi.fn(),
       confirmAfterPayment: vi.fn(),
-      expireIfDue: vi.fn(),
+      expireIfDue: hotelExpireIfDueMock as any,
     };
-    hotelBookingsService = {
-      getPolicies: vi.fn(),
-      acceptPolicies: vi.fn(),
-      getPayableBooking: vi.fn(),
-      confirmBooking: vi.fn(),
-      expireBooking: vi.fn(),
-    };
+
+    gatewayRegistry = new BookingGatewayRegistry();
+    gatewayRegistry.register(BookingType.Flight, flightGateway);
+    gatewayRegistry.register(BookingType.Hotel, hotelGateway);
+
     notificationsService = { create: vi.fn().mockResolvedValue(undefined) };
 
     const configService = {
@@ -71,11 +86,17 @@ describe('PaymentsService', () => {
       }),
     } as unknown as ConfigService;
 
-    service = new PaymentsService(
-      paymentModel,
+    refundsService = new RefundsService(
       refundModel,
-      flightBookingsService,
-      hotelBookingsService,
+      paymentModel,
+      notificationsService,
+      configService,
+    );
+
+    paymentsService = new PaymentsService(
+      paymentModel,
+      gatewayRegistry,
+      refundsService,
       notificationsService,
       configService,
     );
@@ -92,46 +113,49 @@ describe('PaymentsService', () => {
         constructEvent: vi.fn(),
       },
     };
-    (service as unknown as { stripe: unknown }).stripe = stripeMock;
+    (paymentsService as unknown as { stripe: unknown }).stripe = stripeMock;
+    (refundsService as unknown as { stripe: unknown }).stripe = stripeMock;
   });
 
-  it('PAY-02: delegates policy view & acceptance to the right booking service', async () => {
-    flightBookingsService.getPolicies.mockResolvedValue({ bookingType: 'flight' });
-    hotelBookingsService.acceptPolicies.mockResolvedValue({ accepted: true });
+  it('PAY-02: resolves the registered gateway for flight and hotel policies', async () => {
+    flightGateway.getPolicies.mockResolvedValue({ bookingType: 'flight' });
+    hotelGateway.acceptPolicies.mockResolvedValue({ accepted: true });
 
-    await expect(service.getBookingPolicies(user, BookingType.Flight, BOOKING_ID)).resolves.toEqual({
-      bookingType: 'flight',
-    });
-    await expect(service.acceptBookingPolicies(user, BookingType.Hotel, BOOKING_ID)).resolves.toEqual({
-      accepted: true,
-    });
+    await expect(
+      gatewayRegistry.get(BookingType.Flight).getPolicies(user, BOOKING_ID),
+    ).resolves.toEqual({ bookingType: 'flight' });
+    await expect(
+      gatewayRegistry.get(BookingType.Hotel).acceptPolicies(user, BOOKING_ID),
+    ).resolves.toEqual({ accepted: true });
   });
 
   it('PAY-01: rejects payment creation if policies were not accepted', async () => {
-    flightBookingsService.getPayableBooking.mockResolvedValue({
+    flightGateway.getPayableBooking.mockResolvedValue({
       id: BOOKING_ID,
       userId: USER_ID,
       amount: 250,
       currency: 'USD',
+      holdExpiresAt: new Date(Date.now() + 60_000),
       policyAcceptedAt: null,
     });
 
     await expect(
-      service.createPayment(user, { bookingType: BookingType.Flight, bookingId: BOOKING_ID }),
+      paymentsService.createPayment(user, { bookingType: BookingType.Flight, bookingId: BOOKING_ID }),
     ).rejects.toThrow(ConflictException);
   });
 
   it('PAY-01: creates a Stripe PaymentIntent when policies are accepted', async () => {
-    hotelBookingsService.getPayableBooking.mockResolvedValue({
+    hotelGateway.getPayableBooking.mockResolvedValue({
       id: BOOKING_ID,
       userId: USER_ID,
       amount: 199.5,
       currency: 'usd',
+      holdExpiresAt: new Date(Date.now() + 60_000),
       policyAcceptedAt: new Date('2026-11-01T10:00:00Z'),
     });
     paymentModel.findOne.mockResolvedValue(null);
 
-    const res = await service.createPayment(user, {
+    const res = await paymentsService.createPayment(user, {
       bookingType: BookingType.Hotel,
       bookingId: BOOKING_ID,
     });
@@ -155,16 +179,17 @@ describe('PaymentsService', () => {
       attemptCount: 1,
       save,
     });
-    flightBookingsService.getPayableBooking.mockResolvedValue({
+    flightGateway.getPayableBooking.mockResolvedValue({
       id: BOOKING_ID,
       userId: USER_ID,
       amount: 300,
       currency: 'USD',
+      holdExpiresAt: new Date(Date.now() + 60_000),
       policyAcceptedAt: new Date(),
     });
     stripeMock.paymentIntents.create.mockResolvedValue({ id: 'pi_new', client_secret: 'cs_new' });
 
-    const res = await service.retryPayment(user, PAYMENT_ID.toHexString());
+    const res = await paymentsService.retryPayment(user, PAYMENT_ID.toHexString());
     expect(stripeMock.paymentIntents.cancel).toHaveBeenCalledWith('pi_old');
     expect(res.stripePaymentIntentId).toBe('pi_new');
     expect(res.attemptCount).toBe(2);
@@ -176,10 +201,12 @@ describe('PaymentsService', () => {
       lean: vi.fn().mockResolvedValue({ _id: PAYMENT_ID, userId: new Types.ObjectId(USER_ID) }),
     });
 
-    await expect(service.getPayment(otherUser, PAYMENT_ID.toHexString())).rejects.toThrow(
+    await expect(paymentsService.getPayment(otherUser, PAYMENT_ID.toHexString())).rejects.toThrow(
       ForbiddenException,
     );
-    await expect(service.getPayment(adminUser, PAYMENT_ID.toHexString())).resolves.toBeDefined();
+    await expect(
+      paymentsService.getPayment(adminUser, PAYMENT_ID.toHexString()),
+    ).resolves.toBeDefined();
   });
 
   it('PAY-01: rejects invalid webhook signatures', async () => {
@@ -187,7 +214,7 @@ describe('PaymentsService', () => {
       throw new Error('Bad signature');
     });
 
-    await expect(service.handleWebhook(Buffer.from('{}'), 'sig_bad')).rejects.toThrow(
+    await expect(paymentsService.handleWebhook(Buffer.from('{}'), 'sig_bad')).rejects.toThrow(
       BadRequestException,
     );
   });
@@ -208,11 +235,11 @@ describe('PaymentsService', () => {
       type: 'payment_intent.succeeded',
       data: { object: { id: 'pi_123' } },
     });
-    flightBookingsService.confirmAfterPayment.mockResolvedValue({ _id: BOOKING_ID });
+    flightConfirmAfterPaymentMock.mockResolvedValue(true);
 
-    const res = await service.handleWebhook(Buffer.from('{}'), 'sig_ok');
+    const res = await paymentsService.handleWebhook(Buffer.from('{}'), 'sig_ok');
     expect(res).toEqual({ received: true, eventType: 'payment_intent.succeeded' });
-    expect(flightBookingsService.confirmAfterPayment).toHaveBeenCalledWith(
+    expect(flightConfirmAfterPaymentMock).toHaveBeenCalledWith(
       BOOKING_ID,
       PAYMENT_ID.toHexString(),
     );
@@ -236,8 +263,8 @@ describe('PaymentsService', () => {
       data: { object: { id: 'pi_123', last_payment_error: { message: 'Card declined' } } },
     });
 
-    await service.handleWebhook(Buffer.from('{}'), 'sig_ok');
-    expect(hotelBookingsService.expireBooking).toHaveBeenCalledWith(BOOKING_ID);
+    await paymentsService.handleWebhook(Buffer.from('{}'), 'sig_ok');
+    expect(hotelExpireIfDueMock).toHaveBeenCalledWith(BOOKING_ID);
   });
 
   it('PAY-03: processes a refund and updates Payment status', async () => {
@@ -255,7 +282,7 @@ describe('PaymentsService', () => {
     };
     paymentModel.findOne.mockResolvedValue(paymentDoc);
 
-    const refund = await service.processRefundForBooking({
+    const refund = await refundsService.processRefundForBooking({
       bookingType: BookingType.Flight,
       bookingId: BOOKING_ID,
       userId: USER_ID,

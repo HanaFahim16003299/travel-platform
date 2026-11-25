@@ -1,4 +1,4 @@
-import { forwardRef, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PaymentsModule } from '../payments/payments.module.js';
 
@@ -20,7 +20,7 @@ import {
 @Module({
   imports: [
     HotelsModule,
-    forwardRef(() => PaymentsModule),
+    PaymentsModule,
 
     MongooseModule.forFeature([
       {

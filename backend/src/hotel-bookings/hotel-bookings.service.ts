@@ -5,12 +5,13 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
-  Inject,
+  OnModuleInit,
   Optional,
-  forwardRef,
 } from '@nestjs/common';
+import { BookingGatewayRegistry } from '../payments/booking-gateway.registry.js';
 import { BookingType, RefundStatus } from '../payments/enums/payment.enums.js';
 import { PaymentsService } from '../payments/payments.service.js';
+import { RefundsService } from '../payments/refunds.service.js';
 import type { AuthUser } from '../auth/decorators.js';
 import { Role } from '../common/enums/index.js';
 
@@ -54,7 +55,7 @@ import { PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
 import { buildMeta } from '../common/utils/pagination.js';
 
 @Injectable()
-export class HotelBookingsService {
+export class HotelBookingsService implements OnModuleInit {
   // Placeholder until confirmed against Excel requirements
   private readonly holdDurationMinutes = 15;
 
@@ -75,10 +76,29 @@ export class HotelBookingsService {
     @InjectConnection()
     private readonly connection: Connection,
 
-    @Optional()
-    @Inject(forwardRef(() => PaymentsService))
-    private readonly paymentsService?: PaymentsService,
+    @Optional() private readonly paymentsService?: PaymentsService,
+    @Optional() private readonly refundsService?: RefundsService,
+    @Optional() private readonly gatewayRegistry?: BookingGatewayRegistry,
   ) {}
+
+  onModuleInit() {
+    this.gatewayRegistry?.register(BookingType.Hotel, {
+      getPolicies: (user, id) => this.getPolicies(user, id),
+      acceptPolicies: (user, id) => this.acceptPolicies(user, id),
+      getPayableBooking: (id) => this.getPayableBooking(id),
+      confirmAfterPayment: async (id, paymentId) => {
+        try {
+          await this.confirmBooking(id, paymentId);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      expireIfDue: async (id) => {
+        await this.expireBooking(id);
+      },
+    });
+  }
 
   // ==========================================
   // HTL-16, HTL-18: CREATE HOTEL BOOKING
@@ -554,9 +574,9 @@ export class HotelBookingsService {
     if (
       result.refund.required &&
       result.message === 'Booking cancelled successfully' &&
-      this.paymentsService
+      this.refundsService
     ) {
-      const refundDoc = await this.paymentsService.processRefundForBooking({
+      const refundDoc = await this.refundsService.processRefundForBooking({
         bookingType: BookingType.Hotel,
         bookingId: String(result.booking._id),
         userId: String(result.booking.userId),
