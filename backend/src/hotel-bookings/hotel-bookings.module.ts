@@ -16,6 +16,15 @@ import {
   HotelBookingsService,
 } from './hotel-bookings.service.js';
 
+import {
+   HotelReservationsController 
+  } from './reservations/hotel-reservations.controller.js';
+import {
+   HotelReservationsService
+   } from './reservations/hotel-reservations.service.js';
+
+
+
 @Module({
   imports: [
     HotelsModule,
@@ -28,9 +37,9 @@ import {
     ]),
   ],
 
-  controllers: [HotelBookingsController],
+  controllers: [HotelBookingsController, HotelReservationsController],
 
-  providers: [HotelBookingsService],
+  providers: [HotelBookingsService, HotelReservationsService],
 
   exports: [
     HotelBookingsService,
