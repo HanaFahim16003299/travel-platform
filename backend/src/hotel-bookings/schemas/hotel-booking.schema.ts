@@ -98,6 +98,10 @@ export class HotelBooking {
   })
   status: BookingStatus;
 
+  // Unique reference issued once the booking is confirmed (HTL-17)
+  @Prop({ unique: true, sparse: true })
+  bookingReference?: string;
+
   // Original hotel policies
   @Prop({
     type: HotelPoliciesSchema,

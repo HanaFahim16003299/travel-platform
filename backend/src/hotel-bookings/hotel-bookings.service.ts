@@ -3,6 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
   ConflictException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 
 import { InjectModel, InjectConnection } from '@nestjs/mongoose';
@@ -33,7 +34,11 @@ import { BookingStatus } from './enums/booking-status.enum.js';
 
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
 import { buildMeta } from '../common/utils/pagination.js';
-import { HOTEL_HOLD_MINUTES } from './constants.js';
+import { generateBookingReference } from '../common/utils/booking-reference.js';
+import {
+  HOTEL_HOLD_MINUTES,
+  MAX_BOOKING_REFERENCE_ATTEMPTS,
+} from './constants.js';
 
 @Injectable()
 export class HotelBookingsService {
@@ -458,72 +463,100 @@ export class HotelBookingsService {
   async confirmBooking(bookingId: string) {
     const bookingObjectId = this.validateId(bookingId, 'booking');
 
-    const session = await this.connection.startSession();
+    // A duplicate bookingReference aborts the whole transaction, so the
+    // entire attempt (not just the reference write) is retried.
+    for (
+      let attempt = 1;
+      attempt <= MAX_BOOKING_REFERENCE_ATTEMPTS;
+      attempt++
+    ) {
+      const session = await this.connection.startSession();
 
-    try {
-      return await session.withTransaction(async () => {
-        const booking = await this.bookingModel
-          .findById(bookingObjectId)
-          .session(session);
+      try {
+        return await session.withTransaction(async () => {
+          const booking = await this.bookingModel
+            .findById(bookingObjectId)
+            .session(session);
 
-        if (!booking) {
-          throw new NotFoundException('Booking not found');
-        }
+          if (!booking) {
+            throw new NotFoundException('Booking not found');
+          }
 
-        // Prevent duplicate confirmation
-        if (booking.status === BookingStatus.Confirmed) {
-          return booking;
-        }
+          // Prevent duplicate confirmation
+          if (booking.status === BookingStatus.Confirmed) {
+            return booking;
+          }
 
-        // Only pending bookings may be confirmed
-        if (booking.status !== BookingStatus.PendingPayment) {
-          throw new ConflictException('Only pending bookings can be confirmed');
-        }
+          // Only pending bookings may be confirmed
+          if (booking.status !== BookingStatus.PendingPayment) {
+            throw new ConflictException(
+              'Only pending bookings can be confirmed',
+            );
+          }
 
-        // Verify expiration deadline
-        if (!booking.expiresAt || booking.expiresAt.getTime() <= Date.now()) {
-          throw new ConflictException('Booking payment deadline has expired');
-        }
+          // Verify expiration deadline
+          if (!booking.expiresAt || booking.expiresAt.getTime() <= Date.now()) {
+            throw new ConflictException('Booking payment deadline has expired');
+          }
 
-        // Ensure that policies were accepted before payment
-        if (!booking.policyAcceptedAt) {
-          throw new ConflictException(
-            'Booking policies have not been accepted',
+          // Ensure that policies were accepted before payment
+          if (!booking.policyAcceptedAt) {
+            throw new ConflictException(
+              'Booking policies have not been accepted',
+            );
+          }
+
+          // Verify the exact reserved room-night records
+          const nights = getNightsBetween(booking.checkIn, booking.checkOut);
+
+          const roomIds = booking.rooms.map((room) => room.roomId);
+
+          const expectedRecords = roomIds.length * nights.length;
+
+          const reservedRecords = await this.availabilityModel
+            .countDocuments({
+              bookingId: booking._id,
+              hotelId: booking.hotelId,
+              roomId: { $in: roomIds },
+              date: { $in: nights },
+              isBlocked: false,
+            })
+            .session(session);
+
+          if (reservedRecords !== expectedRecords) {
+            throw new ConflictException(
+              'Booking inventory is no longer available',
+            );
+          }
+
+          // Confirm booking
+          booking.status = BookingStatus.Confirmed;
+          booking.confirmedAt = new Date();
+          booking.bookingReference = generateBookingReference();
+
+          return await booking.save({ session });
+        });
+      } catch (error) {
+        if (this.isDuplicateKeyError(error)) {
+          if (attempt < MAX_BOOKING_REFERENCE_ATTEMPTS) {
+            continue;
+          }
+
+          throw new InternalServerErrorException(
+            'Could not generate a booking reference',
           );
         }
 
-        // Verify the exact reserved room-night records
-        const nights = getNightsBetween(booking.checkIn, booking.checkOut);
-
-        const roomIds = booking.rooms.map((room) => room.roomId);
-
-        const expectedRecords = roomIds.length * nights.length;
-
-        const reservedRecords = await this.availabilityModel
-          .countDocuments({
-            bookingId: booking._id,
-            hotelId: booking.hotelId,
-            roomId: { $in: roomIds },
-            date: { $in: nights },
-            isBlocked: false,
-          })
-          .session(session);
-
-        if (reservedRecords !== expectedRecords) {
-          throw new ConflictException(
-            'Booking inventory is no longer available',
-          );
-        }
-
-        // Confirm booking
-        booking.status = BookingStatus.Confirmed;
-        booking.confirmedAt = new Date();
-
-        return await booking.save({ session });
-      });
-    } finally {
-      await session.endSession();
+        throw error;
+      } finally {
+        await session.endSession();
+      }
     }
+
+    // Unreachable: the loop above always returns or throws.
+    throw new InternalServerErrorException(
+      'Could not generate a booking reference',
+    );
   }
 
   // ==========================================
@@ -635,6 +668,19 @@ export class HotelBookingsService {
     }
 
     return refundPercent;
+  }
+
+  // ==========================================
+  // HELPER: DETECT MONGODB DUPLICATE KEY ERROR
+  // ==========================================
+
+  private isDuplicateKeyError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 11000
+    );
   }
 
   // ==========================================
