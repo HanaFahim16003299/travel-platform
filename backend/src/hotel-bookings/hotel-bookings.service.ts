@@ -4,7 +4,15 @@ import {
   BadRequestException,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
+  Inject,
+  Optional,
+  forwardRef,
 } from '@nestjs/common';
+import { BookingType, RefundStatus } from '../payments/enums/payment.enums.js';
+import { PaymentsService } from '../payments/payments.service.js';
+import type { AuthUser } from '../auth/decorators.js';
+import { Role } from '../common/enums/index.js';
 
 import {
   InjectModel,
@@ -12,6 +20,7 @@ import {
 } from '@nestjs/mongoose';
 
 import type { Model, Connection } from 'mongoose';
+import { Types } from 'mongoose';
 
 import {
   HotelBooking,
@@ -65,6 +74,10 @@ export class HotelBookingsService {
 
     @InjectConnection()
     private readonly connection: Connection,
+
+    @Optional()
+    @Inject(forwardRef(() => PaymentsService))
+    private readonly paymentsService?: PaymentsService,
   ) {}
 
   // ==========================================
@@ -391,9 +404,21 @@ export class HotelBookingsService {
     );
 
     const session = await this.connection.startSession();
+    let result: {
+      message: string;
+      booking: HotelBookingDocument;
+      refund: {
+        required: boolean;
+        amount: number;
+        percent: number;
+        currency: string;
+        status: string;
+        refundId?: string | null;
+      };
+    };
 
     try {
-      return await session.withTransaction(async () => {
+      result = await session.withTransaction(async () => {
         // Find booking and verify ownership
         const booking = await this.bookingModel
           .findOne({
@@ -518,12 +543,46 @@ export class HotelBookingsService {
             percent: refundPercent,
             currency: booking.currency,
             status: booking.refundStatus,
+            refundId: null as string | null,
           },
         };
       });
     } finally {
       await session.endSession();
     }
+
+    if (
+      result.refund.required &&
+      result.message === 'Booking cancelled successfully' &&
+      this.paymentsService
+    ) {
+      const refundDoc = await this.paymentsService.processRefundForBooking({
+        bookingType: BookingType.Hotel,
+        bookingId: String(result.booking._id),
+        userId: String(result.booking.userId),
+        amount: result.refund.amount,
+        currency: result.refund.currency,
+        reason: `Hotel cancellation policy (${result.refund.percent}% refund)`,
+      });
+
+      if (refundDoc) {
+        const nextStatus =
+          refundDoc.status === RefundStatus.Succeeded
+            ? 'Processed'
+            : refundDoc.status === RefundStatus.Failed
+              ? 'Failed'
+              : 'Pending';
+        await this.bookingModel.updateOne(
+          { _id: result.booking._id },
+          { $set: { refundStatus: nextStatus } },
+        );
+        result.booking.refundStatus = nextStatus;
+        result.refund.status = nextStatus;
+        result.refund.refundId = String(refundDoc._id);
+      }
+    }
+
+    return result;
   }
 
   // ==========================================
@@ -531,7 +590,7 @@ export class HotelBookingsService {
   // Only called by trusted payment service
   // ==========================================
 
-  async confirmBooking(bookingId: string) {
+  async confirmBooking(bookingId: string, paymentId?: string) {
     const bookingObjectId = this.validateId(
       bookingId,
       'booking',
@@ -613,6 +672,9 @@ export class HotelBookingsService {
         // Confirm booking
         booking.status = BookingStatus.Confirmed;
         booking.confirmedAt = new Date();
+        if (paymentId && Types.ObjectId.isValid(paymentId)) {
+          booking.paymentId = new Types.ObjectId(paymentId);
+        }
 
         return await booking.save({ session });
       });
@@ -632,9 +694,10 @@ export class HotelBookingsService {
     );
 
     const session = await this.connection.startSession();
+    let expiredBooking: HotelBookingDocument;
 
     try {
-      return await session.withTransaction(async () => {
+      expiredBooking = await session.withTransaction(async () => {
         const booking = await this.bookingModel
           .findById(bookingObjectId)
           .session(session);
@@ -692,6 +755,87 @@ export class HotelBookingsService {
     } finally {
       await session.endSession();
     }
+
+    await this.paymentsService?.cancelPendingPaymentForBooking(
+      BookingType.Hotel,
+      bookingId,
+    );
+
+    return expiredBooking;
+  }
+
+  // ==========================================
+  // INTERNAL: POLICY DISPLAY & ACCEPTANCE (PAY-02)
+  // ==========================================
+
+  async getPolicies(user: AuthUser, bookingId: string) {
+    const bookingObjectId = this.validateId(bookingId, 'booking');
+    const booking = await this.bookingModel.findById(bookingObjectId).lean();
+    if (!booking) {
+      throw new NotFoundException('Booking not found');
+    }
+    if (String(booking.userId) !== user.id && user.role !== Role.Admin) {
+      throw new ForbiddenException('You do not have access to this booking');
+    }
+    return {
+      bookingType: 'hotel',
+      bookingId: String(booking._id),
+      status: booking.status,
+      totalPrice: booking.totalPrice,
+      currency: booking.currency,
+      policyAcceptedAt: booking.policyAcceptedAt ?? null,
+      policies: booking.policies,
+    };
+  }
+
+  async acceptPolicies(user: AuthUser, bookingId: string) {
+    const bookingObjectId = this.validateId(bookingId, 'booking');
+    const booking = await this.bookingModel.findById(bookingObjectId);
+    if (!booking) {
+      throw new NotFoundException('Booking not found');
+    }
+    if (String(booking.userId) !== user.id) {
+      throw new ForbiddenException('You do not have access to this booking');
+    }
+    if (booking.status !== BookingStatus.PendingPayment) {
+      throw new ConflictException('Only pending bookings can accept policies');
+    }
+    if (!booking.expiresAt || booking.expiresAt.getTime() <= Date.now()) {
+      throw new ConflictException('Booking payment deadline has expired');
+    }
+    if (!booking.policyAcceptedAt) {
+      booking.policyAcceptedAt = new Date();
+      await booking.save();
+    }
+    return {
+      bookingType: 'hotel',
+      bookingId: String(booking._id),
+      accepted: true,
+      policyAcceptedAt: booking.policyAcceptedAt,
+    };
+  }
+
+  async getPayableBooking(bookingId: string) {
+    const bookingObjectId = this.validateId(bookingId, 'booking');
+    const booking = await this.bookingModel.findById(bookingObjectId).lean();
+    if (!booking) {
+      throw new NotFoundException('Booking not found');
+    }
+    if (
+      booking.status !== BookingStatus.PendingPayment ||
+      !booking.expiresAt ||
+      booking.expiresAt.getTime() <= Date.now()
+    ) {
+      throw new ConflictException('Booking is not awaiting payment or the hold has expired');
+    }
+    return {
+      id: String(booking._id),
+      userId: String(booking.userId),
+      amount: booking.totalPrice,
+      currency: booking.currency,
+      holdExpiresAt: booking.expiresAt,
+      policyAcceptedAt: booking.policyAcceptedAt ?? null,
+    };
   }
 
   // ==========================================

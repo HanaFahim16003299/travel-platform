@@ -10,7 +10,7 @@ import { AppModule } from './app.module.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 
 async function bootstrap() {
-const app = await NestFactory.create<NestExpressApplication>(AppModule);
+const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 
   app.setGlobalPrefix('api');
 app.useStaticAssets(join(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads'), { prefix: '/uploads' });
