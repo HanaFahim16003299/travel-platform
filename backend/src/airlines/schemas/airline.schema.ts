@@ -14,9 +14,32 @@ export class BaggagePolicy {
 
   @Prop({ min: 0 })
   carryOnWeightKg?: number;
+
+  // FLT-08: price of one extra checked bag (must be positive when set). Added by Joumana Hozayen.
+  @Prop({ min: 0 })
+  extraBagPrice?: number;
+
+  // FLT-08: how many extra bags one passenger may add (0 = none). Added by Joumana Hozayen.
+  @Prop({ min: 0, default: 0 })
+  maxExtraBags: number;
 }
 
 export const BaggagePolicySchema = SchemaFactory.createForClass(BaggagePolicy);
+
+// FLT-09: one cancellation tier: cancelling at least `daysBefore` days before departure
+// refunds `refundPercent`. Added by Joumana Hozayen.
+@Schema({ _id: false })
+export class AirlineCancellationTier {
+  @Prop({ required: true, min: 0 })
+  daysBefore: number;
+
+  @Prop({ required: true, min: 0, max: 100 })
+  refundPercent: number;
+}
+
+export const AirlineCancellationTierSchema = SchemaFactory.createForClass(
+  AirlineCancellationTier,
+);
 
 @Schema({ _id: false })
 export class CancellationPolicy {
@@ -31,6 +54,11 @@ export class CancellationPolicy {
 
   @Prop({ min: 0, max: 100, default: 0 })
   refundPercentage: number;
+
+  // FLT-09: tiered refunds; when present they replace the single-rule fields above.
+  // Added by Joumana Hozayen.
+  @Prop({ type: [AirlineCancellationTierSchema], default: [] })
+  tiers: AirlineCancellationTier[];
 }
 
 export const CancellationPolicySchema =

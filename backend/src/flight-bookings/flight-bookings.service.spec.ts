@@ -90,6 +90,56 @@ function bookingDoc(over: Record<string, unknown> = {}) {
 
 const owner = { id: USER_ID, email: 'u@test.com', role: 'user' } as never;
 
+const lean = (value: unknown) => ({ lean: vi.fn().mockResolvedValue(value) });
+
+/** Stubs one bookable flight + airline; returns the ids to put in the request. */
+function stubFlight(
+  h: ReturnType<typeof makeHarness>,
+  airline: Record<string, unknown> = {},
+  flightOver: Record<string, unknown> = {},
+) {
+  const flightId = new Types.ObjectId();
+  const cabinId = new Types.ObjectId();
+  const airlineId = new Types.ObjectId();
+  const departureTime = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const flight = {
+    _id: flightId,
+    airlineId,
+    flightNumber: 'TA100',
+    status: 'scheduled',
+    departureAirportId: new Types.ObjectId(),
+    arrivalAirportId: new Types.ObjectId(),
+    departureTime,
+    arrivalTime: new Date(departureTime.getTime() + 4 * 60 * 60 * 1000),
+    cabins: [
+      {
+        _id: cabinId,
+        cabinClass: 'economy',
+        price: 200,
+        currency: 'USD',
+        availableSeats: 5,
+      },
+    ],
+    ...flightOver,
+  };
+  h.flightModel.findById.mockReturnValue(lean(flight));
+  h.airlineModel.findById.mockReturnValue(
+    lean({ _id: airlineId, isActive: true, ...airline }),
+  );
+  return { flightId: String(flightId), cabinId: String(cabinId), flight };
+}
+
+const adultDto = (over: Record<string, unknown> = {}) => ({
+  firstName: 'Sara',
+  lastName: 'Ali',
+  dateOfBirth: '1990-01-01',
+  documentNumber: 'A1',
+  type: PassengerType.ADULT,
+  email: 'sara@test.com',
+  phone: '0100',
+  ...over,
+});
+
 describe('FlightBookingsService', () => {
   let h: ReturnType<typeof makeHarness>;
   beforeEach(() => {
@@ -133,6 +183,51 @@ describe('FlightBookingsService', () => {
       await h.service.confirmAfterPayment(b._id.toString(), 'pi_1');
 
       expect(h.bookingModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('createDraft with airline policies (FLT-08, FLT-09)', () => {
+    it('uses the airline extra-bag price, bag limit and tiers', async () => {
+      const tiers = [{ daysBefore: 7, refundPercent: 50 }];
+      const ids = stubFlight(h, {
+        baggagePolicy: {
+          checkedBags: 1,
+          checkedBagWeightKg: 23,
+          extraBagPrice: 40,
+          maxExtraBags: 2,
+        },
+        cancellationPolicy: { tiers },
+      });
+      h.bookingModel.create.mockImplementation((doc) => Promise.resolve(doc));
+
+      const draft = await h.service.createDraft(owner, {
+        outbound: ids,
+        passengers: [adultDto({ extraBags: 2 })],
+      } as never);
+
+      expect(draft).toMatchObject({
+        baseFare: 200,
+        baggageFees: 80,
+        totalPrice: 280,
+      });
+      expect(
+        (draft as { segments: { cancellationTiers: unknown }[] }).segments[0]
+          .cancellationTiers,
+      ).toEqual(tiers);
+    });
+
+    it('rejects more extra bags than the airline allows', async () => {
+      const ids = stubFlight(h, {
+        baggagePolicy: { extraBagPrice: 40, maxExtraBags: 1 },
+      });
+
+      await expect(
+        h.service.createDraft(owner, {
+          outbound: ids,
+          passengers: [adultDto({ extraBags: 2 })],
+        } as never),
+      ).rejects.toThrow('Maximum 1 extra bag(s)');
+      expect(h.bookingModel.create).not.toHaveBeenCalled();
     });
   });
 });

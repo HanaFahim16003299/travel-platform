@@ -42,21 +42,6 @@ function toPlain<T extends object>(doc: T): T {
     : { ...doc };
 }
 
-/** Extra airline-policy fields required by FLT-08 / FLT-09 that the Airline schema may not have yet. */
-type BaggagePolicyLike = {
-  checkedBags?: number;
-  checkedBagWeightKg?: number;
-  extraBagPrice?: number;
-  maxExtraBags?: number;
-};
-type CancellationPolicyLike = {
-  refundable?: boolean;
-  refundPercentage?: number;
-  cancellationFee?: number;
-  cancellationDeadlineHours?: number;
-  tiers?: { daysBefore: number; refundPercent: number }[];
-};
-
 interface LoadedLeg {
   segment: Segment;
   availableSeats: number;
@@ -105,8 +90,9 @@ export class FlightBookingsService {
     if (!cabin)
       throw new BadRequestException('Cabin does not belong to this flight');
 
-    const baggage = (airline.baggagePolicy ?? {}) as BaggagePolicyLike;
-    const cancel = (airline.cancellationPolicy ?? {}) as CancellationPolicyLike;
+    // FLT-08 / FLT-09 policies come straight from the Airline schema (review A1).
+    const baggage = airline.baggagePolicy;
+    const cancel = airline.cancellationPolicy;
 
     return {
       availableSeats: cabin.availableSeats,
@@ -124,15 +110,15 @@ export class FlightBookingsService {
         arrivalAt: new Date(flight.arrivalTime),
         cabinClass: cabin.cabinClass,
         unitPrice: cabin.price,
-        freeCheckedBags: baggage.checkedBags ?? 0,
-        checkedBagWeightKg: baggage.checkedBagWeightKg,
-        extraBagPrice: baggage.extraBagPrice ?? 0,
-        maxExtraBags: baggage.maxExtraBags ?? 0,
-        cancellationTiers: cancel.tiers ?? [],
-        refundable: cancel.refundable ?? false,
-        refundPercentage: cancel.refundPercentage ?? 0,
-        cancellationFee: cancel.cancellationFee ?? 0,
-        cancellationDeadlineHours: cancel.cancellationDeadlineHours ?? 0,
+        freeCheckedBags: baggage?.checkedBags ?? 0,
+        checkedBagWeightKg: baggage?.checkedBagWeightKg,
+        extraBagPrice: baggage?.extraBagPrice ?? 0,
+        maxExtraBags: baggage?.maxExtraBags ?? 0,
+        cancellationTiers: cancel?.tiers ?? [],
+        refundable: cancel?.refundable ?? false,
+        refundPercentage: cancel?.refundPercentage ?? 0,
+        cancellationFee: cancel?.cancellationFee ?? 0,
+        cancellationDeadlineHours: cancel?.cancellationDeadlineHours ?? 0,
       },
     };
   }
