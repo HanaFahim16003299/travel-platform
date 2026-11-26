@@ -4,6 +4,7 @@ import { Airline, AirlineSchema } from '../airlines/schemas/airline.schema.js';
 import { Flight, FlightSchema } from './schemas/flight.schema.js';
 import { FlightsController } from './flights.controller.js';
 import { FlightsService } from './flights.service.js';
+import { FlightCancellationHooks } from './flight-cancellation.hooks.js';
 
 @Module({
   imports: [
@@ -13,7 +14,8 @@ import { FlightsService } from './flights.service.js';
     ]),
   ],
   controllers: [FlightsController],
-  providers: [FlightsService],
-  exports: [FlightsService, MongooseModule],
+  // FlightCancellationHooks: FLT-06 listeners, added by Joumana Hozayen (review A3).
+  providers: [FlightsService, FlightCancellationHooks],
+  exports: [FlightsService, FlightCancellationHooks, MongooseModule],
 })
 export class FlightsModule {}

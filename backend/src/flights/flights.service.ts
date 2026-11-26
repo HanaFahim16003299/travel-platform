@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
@@ -22,6 +23,7 @@ import { UpdateFlightDto } from './dto/update-flight.dto.js';
 import { CreateCabinDto } from './dto/create-cabin.dto.js';
 import { UpdateCabinDto } from './dto/update-cabin.dto.js';
 import { SearchFlightsDto } from './dto/search-flights.dto.js';
+import { FlightCancellationHooks } from './flight-cancellation.hooks.js';
 import {
   CabinClass,
   Flight,
@@ -57,6 +59,9 @@ export class FlightsService {
     @InjectModel(Airline.name)
     private readonly airlineModel: Model<AirlineDocument>,
     @InjectConnection() private readonly connection: Connection,
+    // FLT-06: lets flight bookings react to a cancelled flight. Joumana Hozayen (review A3).
+    @Optional()
+    private readonly cancellationHooks?: FlightCancellationHooks,
   ) {}
 
   async create(dto: CreateFlightDto, user: AuthUser) {
@@ -158,11 +163,15 @@ export class FlightsService {
     if (flight.status === FlightStatus.Completed) {
       throw new ConflictException('Completed flights cannot be cancelled');
     }
-    return this.flightModel.findByIdAndUpdate(
+    const cancelled = await this.flightModel.findByIdAndUpdate(
       id,
       { $set: { status: FlightStatus.Cancelled } },
       { new: true },
     );
+    // FLT-06: release holds, cancel confirmed bookings with a full refund and notify
+    // passengers. Added by Joumana Hozayen (review A3).
+    await this.cancellationHooks?.notifyCancelled(id);
+    return cancelled;
   }
 
   async addCabin(id: string, dto: CreateCabinDto, user: AuthUser) {

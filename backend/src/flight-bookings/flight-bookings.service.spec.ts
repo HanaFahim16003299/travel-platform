@@ -31,14 +31,17 @@ function makeHarness() {
     string,
     Mock
   >;
+  const flightCancellations = { register: vi.fn() } as Record<string, Mock>;
   const service = new FlightBookingsService(
     bookingModel as never,
     flightModel as never,
     airlineModel as never,
     seatHolds as never,
     notifications as never,
+    flightCancellations as never,
   );
   return {
+    flightCancellations,
     service,
     bookingModel,
     flightModel,
@@ -294,6 +297,37 @@ describe('FlightBookingsService', () => {
         await h.service.confirmAfterPayment(pending._id.toString(), 'pi_1'),
       ).toBe(confirmed);
       expect(h.notifications.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('flight cancelled by the airline (FLT-06, review A3)', () => {
+    it('registers itself for flight cancellations', () => {
+      h.service.onModuleInit();
+      expect(h.flightCancellations.register).toHaveBeenCalledTimes(1);
+    });
+
+    it('expires holds, cancels confirmed bookings with a full refund amount and notifies everyone', async () => {
+      const held = bookingDoc({ status: FlightBookingStatus.PENDING_PAYMENT });
+      const confirmed = bookingDoc({
+        status: FlightBookingStatus.CONFIRMED,
+        totalPrice: 650,
+      });
+      h.bookingModel.find.mockResolvedValue([held, confirmed]);
+      h.seatHolds.cancelConfirmed.mockResolvedValue({
+        ...confirmed,
+        status: FlightBookingStatus.CANCELLED,
+      });
+
+      h.service.onModuleInit();
+      const listener = h.flightCancellations.register.mock.calls[0][0];
+      await listener.onFlightCancelled(String(confirmed.segments[0].flightId));
+
+      expect(h.seatHolds.expireOne).toHaveBeenCalledWith(held._id, true);
+      expect(h.seatHolds.cancelConfirmed).toHaveBeenCalledWith(
+        confirmed,
+        expect.objectContaining({ refundAmount: 650 }),
+      );
+      expect(h.notifications.create).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -6,6 +6,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
@@ -15,6 +16,7 @@ import { buildMeta } from '../common/utils/pagination.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { NotificationType } from '../notifications/notification-types.js';
 import { Flight, FlightStatus } from '../flights/schemas/flight.schema.js';
+import { FlightCancellationHooks } from '../flights/flight-cancellation.hooks.js';
 import type { FlightDocument } from '../flights/schemas/flight.schema.js';
 import { Airline } from '../airlines/schemas/airline.schema.js';
 import type { AirlineDocument } from '../airlines/schemas/airline.schema.js';
@@ -49,7 +51,7 @@ interface LoadedLeg {
 }
 
 @Injectable()
-export class FlightBookingsService {
+export class FlightBookingsService implements OnModuleInit {
   private readonly logger = new Logger(FlightBookingsService.name);
 
   constructor(
@@ -61,7 +63,15 @@ export class FlightBookingsService {
     private readonly airlineModel: Model<AirlineDocument>,
     private readonly seatHolds: SeatHoldService,
     private readonly notifications: NotificationsService,
+    private readonly flightCancellations: FlightCancellationHooks,
   ) {}
+
+  /** FLT-06: when an airline cancels a flight, cancel its bookings (review A3, Joumana Hozayen). */
+  onModuleInit() {
+    this.flightCancellations.register({
+      onFlightCancelled: (flightId) => this.cancelAllForFlight(flightId),
+    });
+  }
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -478,8 +488,9 @@ export class FlightBookingsService {
   }
 
   /**
-   * For Mahmoud's flight cancellation (FLT-06): confirmed bookings are cancelled
-   * with a 100% refund, holds expire and release seats, passengers are notified.
+   * FLT-06: runs when FlightsService.cancel cancels a flight (registered in onModuleInit).
+   * Pending holds expire and release their seats; confirmed bookings are cancelled with a
+   * 100% refund amount and release their seats; every affected passenger is notified.
    */
   async cancelAllForFlight(flightId: string) {
     const affected = await this.bookingModel.find({
@@ -494,13 +505,21 @@ export class FlightBookingsService {
     for (const b of affected) {
       if (b.status === FlightBookingStatus.PENDING_PAYMENT) {
         await this.seatHolds.expireOne(b._id, true);
+        await this.notify(
+          b.userId,
+          NotificationType.FlightCancelled,
+          'Flight cancelled by the airline',
+          'A flight in your unpaid booking was cancelled, so the booking was released. You were not charged.',
+          b.id as string,
+        );
         continue;
       }
       const c = await this.seatHolds.cancelConfirmed(b, {
         refundAmount: b.totalPrice,
       });
       if (!c) continue;
-      // TODO (Youssef): full refund of c.totalPrice
+      // TODO (PAY-03, Youssef's payments module): create the Stripe refund for the full
+      // c.totalPrice here and store its id in refundId.
       await this.notify(
         c.userId,
         NotificationType.FlightCancelled,
