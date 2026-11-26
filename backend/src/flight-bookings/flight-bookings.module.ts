@@ -5,6 +5,7 @@ import { FlightBookingsController } from './flight-bookings.controller.js';
 import { FlightBookingsService } from './flight-bookings.service.js';
 import { FlightBookingsScheduler } from './flight-bookings.scheduler.js';
 import { ETicketService } from './e-ticket.service.js';
+import { SeatHoldService } from './seat-hold.service.js';
 import { FlightBooking, FlightBookingSchema } from './schemas/flight-booking.schema.js';
 
 @Module({
@@ -15,7 +16,7 @@ import { FlightBooking, FlightBookingSchema } from './schemas/flight-booking.sch
     FlightsModule,
   ],
   controllers: [FlightBookingsController],
-  providers: [FlightBookingsService, FlightBookingsScheduler, ETicketService],
+  providers: [FlightBookingsService, SeatHoldService, FlightBookingsScheduler, ETicketService],
   exports: [FlightBookingsService], // Youssef (payments), Habiba (ACC-12), Mahmoud (FLT-06)
 })
 export class FlightBookingsModule {}
