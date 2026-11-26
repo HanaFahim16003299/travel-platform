@@ -22,6 +22,8 @@ describe('HotelsService', () => {
   };
   // Added by Mohamed Hesham: HTL-02.
   let roomsService: { findAvailableRooms: ReturnType<typeof vi.fn> };
+  // Added by Mohamed Hesham: HTL-01, the city must be one of the seeded cities.
+  let destinations: { assertCityExists: ReturnType<typeof vi.fn> };
   let service: HotelsService;
 
   beforeEach(() => {
@@ -32,7 +34,12 @@ describe('HotelsService', () => {
       findOneAndUpdate: vi.fn(),
     };
     roomsService = { findAvailableRooms: vi.fn() };
-    service = new HotelsService(hotelModel as never, roomsService as never);
+    destinations = { assertCityExists: vi.fn().mockResolvedValue(undefined) };
+    service = new HotelsService(
+      hotelModel as never,
+      roomsService as never,
+      destinations as never,
+    );
   });
 
   describe('create (HTL-01)', () => {
@@ -45,6 +52,17 @@ describe('HotelsService', () => {
       hotelModel.exists.mockResolvedValue(true);
 
       await expect(service.create(dto)).rejects.toThrow(ConflictException);
+      expect(hotelModel.create).not.toHaveBeenCalled();
+    });
+
+    it('throws 400 and creates nothing when the city is not a seeded city', async () => {
+      destinations.assertCityExists.mockRejectedValue(
+        new BadRequestException('Unknown city'),
+      );
+
+      await expect(service.create(dto)).rejects.toThrow(BadRequestException);
+      expect(destinations.assertCityExists).toHaveBeenCalledWith(CITY_ID);
+      expect(hotelModel.exists).not.toHaveBeenCalled();
       expect(hotelModel.create).not.toHaveBeenCalled();
     });
 
@@ -178,6 +196,26 @@ describe('HotelsService', () => {
       await expect(service.update(HOTEL_ID, dto)).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('checks the new city when the update changes cityId', async () => {
+      destinations.assertCityExists.mockRejectedValue(
+        new BadRequestException('Unknown city'),
+      );
+
+      await expect(
+        service.update(HOTEL_ID, { cityId: CITY_ID } as UpdateHotelDto),
+      ).rejects.toThrow(BadRequestException);
+      expect(destinations.assertCityExists).toHaveBeenCalledWith(CITY_ID);
+      expect(hotelModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not look up cities when the update leaves cityId alone', async () => {
+      hotelModel.findOneAndUpdate.mockResolvedValue({ _id: HOTEL_ID });
+
+      await service.update(HOTEL_ID, dto);
+
+      expect(destinations.assertCityExists).not.toHaveBeenCalled();
     });
 
     it('updates an active hotel with $set, returns the new document and runs validators', async () => {

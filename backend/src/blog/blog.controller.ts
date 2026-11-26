@@ -35,7 +35,7 @@ import { UpdatePostDto } from './dto/update-post.dto.js';
 import { BlogService } from './blog.service.js';
 import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard.js';
 import { imageUploadOptions } from '../uploads/image-upload.options.js';
-import { ImageUploadExceptionFilter } from './image-upload-exception.filter.js';
+import { ImageUploadExceptionFilter } from '../uploads/image-upload-exception.filter.js';
 
 @ApiTags('Posts')
 @Controller('posts')

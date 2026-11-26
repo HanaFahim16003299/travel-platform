@@ -6,10 +6,9 @@ import multer from 'multer';
 const EXTENSIONS: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
-  'image/webp': '.webp',
 };
 
-// TODO: confirm the exact size limit for GEN-08 in the requirements sheet.
+// GEN-08: 5 MB per image. Changed by Mohamed Hesham.
 export const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
 export function uploadDir(): string {
@@ -34,7 +33,10 @@ export function imageUploadOptions() {
       cb: (error: Error | null, acceptFile: boolean) => void,
     ) => {
       if (!(file.mimetype in EXTENSIONS)) {
-        return cb(new BadRequestException('Only JPEG, PNG and WebP images are allowed'), false);
+        return cb(
+          new BadRequestException('Only JPEG and PNG images are allowed'),
+          false,
+        );
       }
       cb(null, true);
     },

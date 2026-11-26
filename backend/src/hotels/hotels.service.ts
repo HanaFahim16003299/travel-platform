@@ -12,6 +12,7 @@ import { UpdateHotelDto } from './dto/update-hotel.dto.js';
 import { UpdatePoliciesDto } from './dto/update-policies.dto.js';
 import { QueryHotelDetailsDto } from './dto/query-hotel-details.dto.js';
 import { RoomsService } from './rooms/rooms.service.js';
+import { DestinationsService } from './destinations/destinations.service.js';
 
 @Injectable()
 export class HotelsService {
@@ -19,9 +20,12 @@ export class HotelsService {
     @InjectModel(Hotel.name) private readonly hotelModel: Model<HotelDocument>,
     // Added by Mohamed Hesham: HTL-02.
     private readonly roomsService: RoomsService,
+    // Added by Mohamed Hesham: HTL-01, the city must be one of the seeded cities.
+    private readonly destinations: DestinationsService,
   ) {}
 
   async create(dto: CreateHotelDto) {
+    await this.destinations.assertCityExists(dto.cityId);
     const duplicate = await this.hotelModel.exists({
       name: dto.name,
       cityId: dto.cityId,
@@ -59,6 +63,7 @@ export class HotelsService {
   }
   async update(id: string, dto: UpdateHotelDto) {
     if (!isValidObjectId(id)) throw new BadRequestException('Invalid id');
+    if (dto.cityId) await this.destinations.assertCityExists(dto.cityId);
 
     const hotel = await this.hotelModel.findOneAndUpdate(
       { _id: id, isActive: true },
