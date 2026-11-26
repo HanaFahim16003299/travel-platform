@@ -1,3 +1,4 @@
+
 import {
   Injectable,
   BadRequestException,
@@ -6,28 +7,51 @@ import {
   ConflictException,
 } from '@nestjs/common';
 
-import { InjectModel, InjectConnection } from '@nestjs/mongoose';
+import {
+  InjectModel,
+  InjectConnection,
+} from '@nestjs/mongoose';
 
-import type { Model, Connection, ClientSession } from 'mongoose';
+import type {
+  Model,
+  Connection,
+  ClientSession,
+} from 'mongoose';
 
-import { Review } from './schemas/review.schema.js';
+import {
+  Review,
+} from './schemas/review.schema.js';
 
-import type { ReviewDocument } from './schemas/review.schema.js';
+import type {
+  ReviewDocument,
+} from './schemas/review.schema.js';
 
-import { HotelBooking } from '../hotel-bookings/schemas/hotel-booking.schema.js';
+import {
+  HotelBooking,
+} from '../hotel-bookings/schemas/hotel-booking.schema.js';
 
-import type { HotelBookingDocument } from '../hotel-bookings/schemas/hotel-booking.schema.js';
+import type {
+  HotelBookingDocument,
+} from '../hotel-bookings/schemas/hotel-booking.schema.js';
 
-import { Hotel } from '../hotels/schemas/hotel.schema.js';
+import {
+  Hotel,
+} from '../hotels/schemas/hotel.schema.js';
 
-import type { HotelDocument } from '../hotels/schemas/hotel.schema.js';
+import type {
+  HotelDocument,
+} from '../hotels/schemas/hotel.schema.js';
 
-import { BookingStatus } from '../hotel-bookings/enums/booking-status.enum.js';
+import {
+  BookingStatus,
+} from '../hotel-bookings/enums/booking-status.enum.js';
 
 import { CreateReviewDto } from './dto/create-review.dto.js';
 import { UpdateReviewDto } from './dto/update-review.dto.js';
 
-import { PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
+import {
+  PaginationQueryDto,
+} from '../common/dto/pagination-query.dto.js';
 
 import { buildMeta } from '../common/utils/pagination.js';
 
@@ -51,10 +75,17 @@ export class ReviewsService {
   // HTL-23: CREATE REVIEW
   // ==========================================
 
-  async create(userId: string, bookingId: string, dto: CreateReviewDto) {
+  async create(
+    userId: string,
+    bookingId: string,
+    dto: CreateReviewDto,
+  ) {
     const ownerId = this.validateId(userId, 'user');
 
-    const validBookingId = this.validateId(bookingId, 'booking');
+    const validBookingId = this.validateId(
+      bookingId,
+      'booking',
+    );
 
     const session = await this.connection.startSession();
 
@@ -66,19 +97,20 @@ export class ReviewsService {
           .session(session);
 
         if (!booking) {
-          throw new NotFoundException('Booking not found');
+          throw new NotFoundException(
+            'Booking not found',
+          );
         }
 
         // Verify booking ownership
         if (String(booking.userId) !== ownerId) {
-          throw new ForbiddenException('You can only review your own bookings');
+          throw new ForbiddenException(
+            'You can only review your own bookings',
+          );
         }
 
-        // Confirmed or Completed bookings are eligible (HTL-23)
-        if (
-          booking.status !== BookingStatus.Confirmed &&
-          booking.status !== BookingStatus.Completed
-        ) {
+        // Only confirmed bookings are eligible
+        if (booking.status !== BookingStatus.Confirmed) {
           throw new BadRequestException(
             'Only confirmed bookings can receive reviews',
           );
@@ -99,7 +131,9 @@ export class ReviewsService {
           .session(session);
 
         if (existingReview) {
-          throw new ConflictException('This booking already has a review');
+          throw new ConflictException(
+            'This booking already has a review',
+          );
         }
 
         // Create review
@@ -114,7 +148,10 @@ export class ReviewsService {
         await review.save({ session });
 
         // Update the hotel's review statistics
-        await this.updateHotelRating(String(booking.hotelId), session);
+        await this.updateHotelRating(
+          String(booking.hotelId),
+          session,
+        );
 
         return review;
       });
@@ -126,7 +163,9 @@ export class ReviewsService {
         'code' in error &&
         error.code === 11000
       ) {
-        throw new ConflictException('This booking already has a review');
+        throw new ConflictException(
+          'This booking already has a review',
+        );
       }
 
       throw error;
@@ -139,13 +178,25 @@ export class ReviewsService {
   // HTL-23: EDIT REVIEW
   // ==========================================
 
-  async update(userId: string, reviewId: string, dto: UpdateReviewDto) {
+  async update(
+    userId: string,
+    reviewId: string,
+    dto: UpdateReviewDto,
+  ) {
     const ownerId = this.validateId(userId, 'user');
 
-    const validReviewId = this.validateId(reviewId, 'review');
+    const validReviewId = this.validateId(
+      reviewId,
+      'review',
+    );
 
-    if (dto.rating === undefined && dto.comment === undefined) {
-      throw new BadRequestException('Provide a rating or comment to update');
+    if (
+      dto.rating === undefined &&
+      dto.comment === undefined
+    ) {
+      throw new BadRequestException(
+        'Provide a rating or comment to update',
+      );
     }
 
     const session = await this.connection.startSession();
@@ -157,12 +208,16 @@ export class ReviewsService {
           .session(session);
 
         if (!review) {
-          throw new NotFoundException('Review not found');
+          throw new NotFoundException(
+            'Review not found',
+          );
         }
 
         // Verify review ownership
         if (String(review.userId) !== ownerId) {
-          throw new ForbiddenException('You can only edit your own reviews');
+          throw new ForbiddenException(
+            'You can only edit your own reviews',
+          );
         }
 
         // Update only supplied fields
@@ -177,7 +232,10 @@ export class ReviewsService {
         await review.save({ session });
 
         // Recalculate hotel rating
-        await this.updateHotelRating(String(review.hotelId), session);
+        await this.updateHotelRating(
+          String(review.hotelId),
+          session,
+        );
 
         return review;
       });
@@ -190,10 +248,16 @@ export class ReviewsService {
   // HTL-23: DELETE REVIEW
   // ==========================================
 
-  async remove(userId: string, reviewId: string) {
+  async remove(
+    userId: string,
+    reviewId: string,
+  ) {
     const ownerId = this.validateId(userId, 'user');
 
-    const validReviewId = this.validateId(reviewId, 'review');
+    const validReviewId = this.validateId(
+      reviewId,
+      'review',
+    );
 
     const session = await this.connection.startSession();
 
@@ -204,21 +268,31 @@ export class ReviewsService {
           .session(session);
 
         if (!review) {
-          throw new NotFoundException('Review not found');
+          throw new NotFoundException(
+            'Review not found',
+          );
         }
 
         // Verify review ownership
         if (String(review.userId) !== ownerId) {
-          throw new ForbiddenException('You can only delete your own reviews');
+          throw new ForbiddenException(
+            'You can only delete your own reviews',
+          );
         }
 
         const hotelId = String(review.hotelId);
 
         // Delete review
-        await this.reviewModel.deleteOne({ _id: review._id }, { session });
+        await this.reviewModel.deleteOne(
+          { _id: review._id },
+          { session },
+        );
 
         // Recalculate hotel rating
-        await this.updateHotelRating(hotelId, session);
+        await this.updateHotelRating(
+          hotelId,
+          session,
+        );
 
         return {
           message: 'Review deleted successfully',
@@ -234,8 +308,14 @@ export class ReviewsService {
   // Public endpoint
   // ==========================================
 
-  async findByHotel(hotelId: string, query: PaginationQueryDto) {
-    const validHotelId = this.validateId(hotelId, 'hotel');
+  async findByHotel(
+    hotelId: string,
+    query: PaginationQueryDto,
+  ) {
+    const validHotelId = this.validateId(
+      hotelId,
+      'hotel',
+    );
 
     const hotel = await this.hotelModel
       .findById(validHotelId)
@@ -243,21 +323,39 @@ export class ReviewsService {
       .lean();
 
     if (!hotel) {
-      throw new NotFoundException('Hotel not found');
+      throw new NotFoundException(
+        'Hotel not found',
+      );
     }
 
-    const { page = 1, limit = 10, sort, order } = query;
+    const {
+      page = 1,
+      limit = 10,
+      sort,
+      order,
+    } = query;
 
-    const allowedSortFields = ['createdAt', 'updatedAt', 'rating'];
+    const allowedSortFields = [
+      'createdAt',
+      'updatedAt',
+      'rating',
+    ];
 
-    if (sort !== undefined && !allowedSortFields.includes(sort)) {
-      throw new BadRequestException('Invalid sorting field');
+    if (
+      sort !== undefined &&
+      !allowedSortFields.includes(sort)
+    ) {
+      throw new BadRequestException(
+        'Invalid sorting field',
+      );
     }
 
     const sortField = sort ?? 'createdAt';
 
     // Default: newest reviews first
-    const direction: 1 | -1 = sort ? (order === 'asc' ? 1 : -1) : -1;
+    const direction: 1 | -1 = sort
+      ? (order === 'asc' ? 1 : -1)
+      : -1;
 
     const filter = {
       hotelId: hotel._id,
@@ -266,7 +364,9 @@ export class ReviewsService {
     const [data, total] = await Promise.all([
       this.reviewModel
         .find(filter)
-        .select('userId hotelId rating comment createdAt updatedAt')
+        .select(
+          'userId hotelId rating comment createdAt updatedAt',
+        )
         .populate('userId', 'firstName lastName')
         .sort({
           [sortField]: direction,
@@ -301,7 +401,9 @@ export class ReviewsService {
       .session(session);
 
     if (!hotel) {
-      throw new NotFoundException('Hotel not found');
+      throw new NotFoundException(
+        'Hotel not found',
+      );
     }
 
     const result = await this.reviewModel
@@ -325,9 +427,14 @@ export class ReviewsService {
       .session(session);
 
     const averageRating =
-      result.length > 0 ? Math.round(result[0].averageRating * 100) / 100 : 0;
+      result.length > 0
+        ? Math.round(result[0].averageRating * 100) / 100
+        : 0;
 
-    const reviewCount = result.length > 0 ? result[0].reviewCount : 0;
+    const reviewCount =
+      result.length > 0
+        ? result[0].reviewCount
+        : 0;
 
     const updateResult = await this.hotelModel.updateOne(
       { _id: hotel._id },
@@ -349,9 +456,17 @@ export class ReviewsService {
   // HELPER: VALIDATE MONGODB ID
   // ==========================================
 
-  private validateId(id: string, entity: string): string {
-    if (typeof id !== 'string' || !/^[a-fA-F0-9]{24}$/.test(id)) {
-      throw new BadRequestException(`Invalid ${entity} ID`);
+  private validateId(
+    id: string,
+    entity: string,
+  ): string {
+    if (
+      typeof id !== 'string' ||
+      !/^[a-fA-F0-9]{24}$/.test(id)
+    ) {
+      throw new BadRequestException(
+        `Invalid ${entity} ID`,
+      );
     }
 
     return id.toLowerCase();

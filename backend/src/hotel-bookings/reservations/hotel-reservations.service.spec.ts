@@ -1,3 +1,4 @@
+// Created by Mohamed Hesham: unit tests for HTL-22 (this whole file).
 import { describe, it, expect, vi } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { HotelReservationsService } from './hotel-reservations.service.js';
@@ -55,6 +56,12 @@ describe('HotelReservationsService.findForHotel', () => {
     expect(chain.limit).toHaveBeenCalledWith(10);
   });
 
+  it('includes the booking reference in the returned fields', async () => {
+    const { service, chain } = setup();
+    await service.findForHotel(HOTEL_ID, q());
+    expect(chain.select.mock.calls[0][0]).toContain('bookingReference');
+  });
+
   it('returns only the guest name and never payment, policy or refund data', async () => {
     const { service, chain } = setup();
     await service.findForHotel(HOTEL_ID, q());
@@ -63,7 +70,6 @@ describe('HotelReservationsService.findForHotel', () => {
     for (const secret of ['paymentId', 'policies', 'refund']) {
       expect(selected).not.toContain(secret);
     }
-    expect(selected).toContain('bookingReference');
   });
 
   it('rejects an invalid hotel id without querying', async () => {
