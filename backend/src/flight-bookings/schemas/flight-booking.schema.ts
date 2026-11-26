@@ -63,6 +63,21 @@ export class Segment {
 }
 const SegmentSchema = SchemaFactory.createForClass(Segment);
 
+/**
+ * Seats that still have to be given back to a flight cabin. Written in the same update
+ * that expires or cancels a booking, and removed one by one once released, so a failed
+ * release is retried by the scheduler instead of being lost (review A5, Joumana Hozayen).
+ */
+@Schema()
+export class PendingSeatRelease {
+  declare _id: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true }) flightId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true }) cabinId: Types.ObjectId;
+  @Prop({ required: true, min: 1 }) count: number;
+}
+const PendingSeatReleaseSchema =
+  SchemaFactory.createForClass(PendingSeatRelease);
+
 @Schema({ timestamps: true })
 export class FlightBooking {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
@@ -101,6 +116,9 @@ export class FlightBooking {
   @Prop() cancelledAt?: Date;
   @Prop() refundAmount?: number;
   @Prop() refundId?: string;
+
+  @Prop({ type: [PendingSeatReleaseSchema], default: [] })
+  pendingSeatReleases: PendingSeatRelease[];
 
   // Set by Mongoose because of timestamps: true
   createdAt?: Date;

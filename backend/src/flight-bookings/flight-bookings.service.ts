@@ -458,24 +458,13 @@ export class FlightBookingsService {
     const b = await this.getCancellable(user, id);
     const quote = computeRefund(b);
 
-    const cancelled = await this.bookingModel.findOneAndUpdate(
-      { _id: b._id, status: FlightBookingStatus.CONFIRMED },
-      {
-        $set: {
-          status: FlightBookingStatus.CANCELLED,
-          cancelledAt: new Date(),
-          refundAmount: quote.refundAmount,
-        },
-      },
-      { new: true },
-    );
+    // Status change and seat release are recorded in one update (review A5).
+    const cancelled = await this.seatHolds.cancelConfirmed(b, {
+      refundAmount: quote.refundAmount,
+    });
     if (!cancelled)
       throw new ConflictException('Booking is no longer confirmed');
 
-    await this.seatHolds.releaseSegments(
-      cancelled.segments,
-      cancelled.seatCount,
-    );
     // TODO (when Youssef's PaymentsService exists): if quote.refundAmount > 0, create the
     // Stripe refund and save its id in cancelled.refundId (PAY-03).
     await this.notify(
@@ -507,19 +496,10 @@ export class FlightBookingsService {
         await this.seatHolds.expireOne(b._id, true);
         continue;
       }
-      const c = await this.bookingModel.findOneAndUpdate(
-        { _id: b._id, status: FlightBookingStatus.CONFIRMED },
-        {
-          $set: {
-            status: FlightBookingStatus.CANCELLED,
-            cancelledAt: new Date(),
-            refundAmount: b.totalPrice,
-          },
-        },
-        { new: true },
-      );
+      const c = await this.seatHolds.cancelConfirmed(b, {
+        refundAmount: b.totalPrice,
+      });
       if (!c) continue;
-      await this.seatHolds.releaseSegments(c.segments, c.seatCount);
       // TODO (Youssef): full refund of c.totalPrice
       await this.notify(
         c.userId,

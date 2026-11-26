@@ -23,7 +23,7 @@ function makeHarness() {
   const airlineModel = { findById: vi.fn() } as Record<string, Mock>;
   const seatHolds = {
     holdDraft: vi.fn(),
-    releaseSegments: vi.fn().mockResolvedValue(undefined),
+    cancelConfirmed: vi.fn(),
     expireOne: vi.fn().mockResolvedValue(undefined),
     expireStaleHolds: vi.fn(),
   } as Record<string, Mock>;
