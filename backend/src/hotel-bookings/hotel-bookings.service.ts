@@ -1,10 +1,11 @@
-
+import { randomBytes } from 'node:crypto';
 import {
   Injectable,
   BadRequestException,
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  InternalServerErrorException,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
@@ -20,7 +21,7 @@ import {
   InjectConnection,
 } from '@nestjs/mongoose';
 
-import type { Model, Connection } from 'mongoose';
+import type { Model, Connection, ClientSession } from 'mongoose';
 import { Types } from 'mongoose';
 
 import {
@@ -53,6 +54,11 @@ import { BookingStatus } from './enums/booking-status.enum.js';
 
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
 import { buildMeta } from '../common/utils/pagination.js';
+
+// Added by Mohamed Hesham: booking reference (HTL-17): 6 characters, no 0/O or 1/I so it is easy to read out loud.
+const REFERENCE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const REFERENCE_LENGTH = 6;
+const MAX_REFERENCE_ATTEMPTS = 5;
 
 @Injectable()
 export class HotelBookingsService implements OnModuleInit {
@@ -692,6 +698,9 @@ export class HotelBookingsService implements OnModuleInit {
         // Confirm booking
         booking.status = BookingStatus.Confirmed;
         booking.confirmedAt = new Date();
+        // Added by Mohamed Hesham: HTL-17 booking reference.
+        booking.bookingReference =
+          await this.generateUniqueReference(session);
         if (paymentId && Types.ObjectId.isValid(paymentId)) {
           booking.paymentId = new Types.ObjectId(paymentId);
         }
@@ -862,6 +871,31 @@ export class HotelBookingsService implements OnModuleInit {
       holdExpiresAt: booking.expiresAt,
       policyAcceptedAt: booking.policyAcceptedAt ?? null,
     };
+  }
+
+  // ==========================================
+  // HELPER: UNIQUE BOOKING REFERENCE (HTL-17), added by Mohamed Hesham
+  // ==========================================
+
+  private async generateUniqueReference(
+    session: ClientSession,
+  ): Promise<string> {
+    for (let attempt = 0; attempt < MAX_REFERENCE_ATTEMPTS; attempt++) {
+      const reference = Array.from(
+        randomBytes(REFERENCE_LENGTH),
+        (byte) => REFERENCE_ALPHABET[byte % REFERENCE_ALPHABET.length],
+      ).join('');
+
+      const taken = await this.bookingModel
+        .exists({ bookingReference: reference })
+        .session(session);
+
+      if (!taken) return reference;
+    }
+
+    throw new InternalServerErrorException(
+      'Could not generate a booking reference',
+    );
   }
 
   // ==========================================

@@ -67,7 +67,7 @@ export class AdminBookingsService {
       ...hotels.map((h) => ({
         id: String(h._id),
         bookingType: BookingType.Hotel,
-        reference: String(h._id),
+        reference: (h as { bookingReference?: string }).bookingReference ?? String(h._id),
         userId: String(h.userId),
         provider: String(h.hotelId),
         dates: {

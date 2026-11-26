@@ -96,6 +96,10 @@ export class HotelBooking {
   })
   currency: string;
 
+  // Unique booking reference (HTL-17)
+  @Prop({ unique: true, sparse: true })
+  bookingReference?: string;
+
   // Booking status
   @Prop({
     type: String,

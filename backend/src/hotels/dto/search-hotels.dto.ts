@@ -10,10 +10,11 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
+import { TenPerPageQueryDto } from './ten-per-page-query.dto.js';
 
-// GEN-05: page / limit come from PaginationQueryDto (default limit is 10)
-export class QuerySearchHotelsDto extends PaginationQueryDto {
+// GEN-05: page / limit (max 10) come from TenPerPageQueryDto
+// Changed by Mohamed Hesham: GEN-05.
+export class QuerySearchHotelsDto extends TenPerPageQueryDto {
   // TODO: search by country/city name once the City collection carries that
   // data; for now the destination is the city's id.
   @ApiProperty({ example: '507f1f77bcf86cd799439011' })
