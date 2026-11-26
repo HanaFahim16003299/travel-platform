@@ -9,7 +9,23 @@ import { BookingStatus } from '../enums/booking-status.enum.js';
 import { QueryHotelReservationsDto } from '../dto/query-hotel-reservations.dto.js';
 import { buildMeta } from '../../common/utils/pagination.js';
 
+// Created by Mohamed Hesham: HTL-22 (this whole file).
 const OBJECT_ID = /^[a-fA-F0-9]{24}$/;
+
+// What a hotel moderator may see about a reservation: no payment, policy or refund data.
+const RESERVATION_FIELDS = [
+  'bookingReference',
+  'userId',
+  'rooms',
+  'checkIn',
+  'checkOut',
+  'nights',
+  'guests',
+  'totalPrice',
+  'status',
+  'confirmedAt',
+  'createdAt',
+].join(' ');
 
 @Injectable()
 export class HotelReservationsService {
@@ -36,9 +52,7 @@ export class HotelReservationsService {
     const [data, total] = await Promise.all([
       this.bookingModel
         .find(filter)
-        .select(
-          'userId bookingReference rooms checkIn checkOut nights guests totalPrice status confirmedAt createdAt',
-        )
+        .select(RESERVATION_FIELDS)
         .populate('userId', 'firstName lastName')
         .sort({ checkIn: -1, _id: -1 })
         .skip((page - 1) * limit)

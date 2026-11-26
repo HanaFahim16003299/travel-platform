@@ -12,6 +12,11 @@ import {
   RoomAvailability,
   RoomAvailabilityDocument,
 } from '../schemas/room-availability.schema.js';
+// Added by Mohamed Hesham: HTL-08.
+import {
+  HotelBooking,
+  HotelBookingDocument,
+} from '../../hotel-bookings/schemas/hotel-booking.schema.js';
 import { CreateAvailabilityDto } from '../dto/create-availability.dto.js';
 import {
   AvailabilityAction,
@@ -34,6 +39,8 @@ export interface NightView {
   date: Date;
   status: NightStatus;
   bookingId?: Types.ObjectId;
+  // Added by Mohamed Hesham: HTL-08, only present once the booking is confirmed.
+  bookingReference?: string;
 }
 
 @Injectable()
@@ -43,6 +50,9 @@ export class AvailabilityService {
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
     @InjectModel(RoomAvailability.name)
     private readonly availabilityModel: Model<RoomAvailabilityDocument>,
+    // Added by Mohamed Hesham: HTL-08.
+    @InjectModel(HotelBooking.name)
+    private readonly bookingModel: Model<HotelBookingDocument>,
   ) {}
 
   // HTL-04: open a date range of nights for a room (ranges must not overlap)
@@ -166,11 +176,14 @@ export class AvailabilityService {
       .sort({ date: 1 })
       .lean();
 
+    // Added by Mohamed Hesham: HTL-08, one query for the references of every booked night.
+    const references = await this.findBookingReferences(records);
+
     const nightsByRoom = new Map<string, NightView[]>();
     for (const record of records) {
       const key = record.roomId.toString();
       const list = nightsByRoom.get(key) ?? [];
-      list.push(this.toNightView(record));
+      list.push(this.toNightView(record, references));
       nightsByRoom.set(key, list);
     }
 
@@ -186,7 +199,14 @@ export class AvailabilityService {
   }
 
   // HTL-11 / HTL-15: active rooms that are free for every night of the stay
-  async findFreeRooms(hotelId: string, startDate: Date, endDate: Date) {
+  // Changed by Mohamed Hesham: GEN-05, returns one page of rooms plus the total count.
+  async findFreeRooms(
+    hotelId: string,
+    startDate: Date,
+    endDate: Date,
+    page: number,
+    limit: number,
+  ) {
     if (!isValidObjectId(hotelId)) throw new BadRequestException('Invalid id');
 
     // endDate is the check-out day, so it is not a night of the stay
@@ -196,10 +216,17 @@ export class AvailabilityService {
     const roomIds = await this.freeRoomIds(new Types.ObjectId(hotelId), nights);
 
     // deactivated rooms are excluded from search (HTL-06)
-    return this.roomModel
-      .find({ _id: { $in: roomIds }, isActive: true })
-      .sort({ name: 1 })
-      .lean();
+    const filter = { _id: { $in: roomIds }, isActive: true };
+    const [rooms, total] = await Promise.all([
+      this.roomModel
+        .find(filter)
+        .sort({ name: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      this.roomModel.countDocuments(filter),
+    ]);
+    return { rooms, total };
   }
 
   // HTL-11 / HTL-12: same free-room check as findFreeRooms, for many hotels at
@@ -256,17 +283,21 @@ export class AvailabilityService {
   }
 
   // BOOKED wins over BLOCKED; nights that were never opened are not returned
-  private toNightView(record: {
-    date: Date;
-    isBlocked: boolean;
-    bookingId?: Types.ObjectId | null;
-  }): NightView {
+  private toNightView(
+    record: {
+      date: Date;
+      isBlocked: boolean;
+      bookingId?: Types.ObjectId | null;
+    },
+    references: Map<string, string>,
+  ): NightView {
     if (record.bookingId) {
-      // TODO: return the reservation reference once HotelBooking exists
+      const bookingReference = references.get(record.bookingId.toString());
       return {
         date: record.date,
         status: NightStatus.BOOKED,
         bookingId: record.bookingId,
+        ...(bookingReference && { bookingReference }),
       };
     }
     return {
@@ -274,6 +305,33 @@ export class AvailabilityService {
       status: record.isBlocked ? NightStatus.BLOCKED : NightStatus.AVAILABLE,
     };
   }
+  // Added by Mohamed Hesham: HTL-08. Maps booking id to reference for the booked nights
+  // in `records`. A booking that is not confirmed yet has no reference.
+  private async findBookingReferences(
+    records: { bookingId?: Types.ObjectId | null }[],
+  ): Promise<Map<string, string>> {
+    const bookingIds = [
+      ...new Set(
+        records.flatMap((record) =>
+          record.bookingId ? [record.bookingId.toString()] : [],
+        ),
+      ),
+    ];
+    if (bookingIds.length === 0) return new Map();
+
+    const bookings = await this.bookingModel
+      .find({ _id: { $in: bookingIds }, bookingReference: { $exists: true } })
+      .select('bookingReference')
+      .lean();
+
+    return new Map(
+      bookings.map((booking) => [
+        booking._id.toString(),
+        booking.bookingReference as string,
+      ]),
+    );
+  }
+
   // same checks as RoomsService, shared by every availability method
   private async assertActiveRoom(hotelId: string, roomId: string) {
     if (!isValidObjectId(hotelId) || !isValidObjectId(roomId))

@@ -1,9 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional } from 'class-validator';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
+import { TenPerPageQueryDto } from '../../hotels/dto/ten-per-page-query.dto.js';
 import { BookingStatus } from '../enums/booking-status.enum.js';
 
-export class QueryHotelReservationsDto extends PaginationQueryDto {
+// Created by Mohamed Hesham: HTL-22 query parameters (pagination + status filter).
+// Changed by Mohamed Hesham: GEN-05, page size is capped at 10.
+export class QueryHotelReservationsDto extends TenPerPageQueryDto {
   @ApiPropertyOptional({
     enum: BookingStatus,
     description:

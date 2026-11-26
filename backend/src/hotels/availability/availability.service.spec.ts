@@ -31,6 +31,8 @@ describe('AvailabilityService', () => {
     find: ReturnType<typeof vi.fn>;
     aggregate: ReturnType<typeof vi.fn>;
   };
+  // Added by Mohamed Hesham: HTL-08.
+  let bookingModel: { find: ReturnType<typeof vi.fn> };
   let service: AvailabilityService;
 
   // chainable find().sort()...lean() mock, matching the real query builder
@@ -39,6 +41,7 @@ describe('AvailabilityService', () => {
       sort: vi.fn(() => chain),
       skip: vi.fn(() => chain),
       limit: vi.fn(() => chain),
+      select: vi.fn(() => chain),
       lean: vi.fn(async () => result),
     };
     return chain;
@@ -64,10 +67,12 @@ describe('AvailabilityService', () => {
       find: vi.fn(() => chainable([])),
       aggregate: vi.fn().mockResolvedValue([]),
     };
+    bookingModel = { find: vi.fn(() => chainable([])) };
     service = new AvailabilityService(
       hotelModel as never,
       roomModel as never,
       availabilityModel as never,
+      bookingModel as never,
     );
   });
 
@@ -255,6 +260,83 @@ describe('AvailabilityService', () => {
       expect(result.data[0].nights[0].status).toBe(NightStatus.BOOKED);
     });
 
+    // Added by Mohamed Hesham: HTL-08 tests.
+    it('shows the booking reference on a booked night of a confirmed booking', async () => {
+      const bookingId = new Types.ObjectId();
+      roomModel.find.mockReturnValue(
+        chainable([
+          { _id: new Types.ObjectId(ROOM_ID), name: 'Room 1', isActive: true },
+        ]),
+      );
+      roomModel.countDocuments.mockResolvedValue(1);
+      availabilityModel.find.mockReturnValue(
+        chainable([
+          {
+            roomId: new Types.ObjectId(ROOM_ID),
+            date: new Date('2026-12-01T00:00:00Z'),
+            isBlocked: false,
+            bookingId,
+          },
+        ]),
+      );
+      bookingModel.find.mockReturnValue(
+        chainable([{ _id: bookingId, bookingReference: 'ABC234' }]),
+      );
+
+      const result = await service.getHotelAvailability(HOTEL_ID, query);
+
+      expect(result.data[0].nights[0].bookingReference).toBe('ABC234');
+    });
+
+    it('shows no reference on a booked night whose booking is not confirmed yet', async () => {
+      const bookingId = new Types.ObjectId();
+      roomModel.find.mockReturnValue(
+        chainable([
+          { _id: new Types.ObjectId(ROOM_ID), name: 'Room 1', isActive: true },
+        ]),
+      );
+      roomModel.countDocuments.mockResolvedValue(1);
+      availabilityModel.find.mockReturnValue(
+        chainable([
+          {
+            roomId: new Types.ObjectId(ROOM_ID),
+            date: new Date('2026-12-01T00:00:00Z'),
+            isBlocked: false,
+            bookingId,
+          },
+        ]),
+      );
+      // a pending booking has no bookingReference, so the query finds nothing
+
+      const result = await service.getHotelAvailability(HOTEL_ID, query);
+
+      expect(result.data[0].nights[0].status).toBe(NightStatus.BOOKED);
+      expect(result.data[0].nights[0]).not.toHaveProperty('bookingReference');
+    });
+
+    it('does not query bookings when no night on the page is booked', async () => {
+      roomModel.find.mockReturnValue(
+        chainable([
+          { _id: new Types.ObjectId(ROOM_ID), name: 'Room 1', isActive: true },
+        ]),
+      );
+      roomModel.countDocuments.mockResolvedValue(1);
+      availabilityModel.find.mockReturnValue(
+        chainable([
+          {
+            roomId: new Types.ObjectId(ROOM_ID),
+            date: new Date('2026-12-01T00:00:00Z'),
+            isBlocked: false,
+            bookingId: null,
+          },
+        ]),
+      );
+
+      await service.getHotelAvailability(HOTEL_ID, query);
+
+      expect(bookingModel.find).not.toHaveBeenCalled();
+    });
+
     it('omits nights that were never opened instead of listing them as a status', async () => {
       roomModel.find.mockReturnValue(
         chainable([
@@ -306,6 +388,8 @@ describe('AvailabilityService', () => {
         HOTEL_ID,
         new Date('2026-12-01T00:00:00Z'),
         new Date('2026-12-04T00:00:00Z'),
+        1,
+        10,
       );
 
       const pipeline = availabilityModel.aggregate.mock.calls[0][0];
@@ -342,11 +426,35 @@ describe('AvailabilityService', () => {
         HOTEL_ID,
         new Date('2026-12-01T00:00:00Z'),
         new Date('2026-12-04T00:00:00Z'),
+        1,
+        10,
       );
 
       expect(find).toHaveBeenCalledWith(
         expect.objectContaining({ isActive: true }),
       );
+    });
+
+    // Added by Mohamed Hesham: GEN-05 tests.
+    it('returns one page: skips (page - 1) x limit rooms and reports the total', async () => {
+      availabilityModel.aggregate.mockResolvedValue([
+        { _id: new Types.ObjectId() },
+      ]);
+      const chain = chainable([{ name: 'Room 11' }]);
+      roomModel.find = vi.fn(() => chain);
+      roomModel.countDocuments.mockResolvedValue(23);
+
+      const result = await service.findFreeRooms(
+        HOTEL_ID,
+        new Date('2026-12-01T00:00:00Z'),
+        new Date('2026-12-04T00:00:00Z'),
+        2,
+        10,
+      );
+
+      expect(chain.skip).toHaveBeenCalledWith(10);
+      expect(chain.limit).toHaveBeenCalledWith(10);
+      expect(result).toEqual({ rooms: [{ name: 'Room 11' }], total: 23 });
     });
   });
 

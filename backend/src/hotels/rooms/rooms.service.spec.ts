@@ -24,6 +24,8 @@ describe('RoomsService', () => {
     exists: ReturnType<typeof vi.fn>;
     deleteMany: ReturnType<typeof vi.fn>;
   };
+  // Added by Mohamed Hesham: HTL-06.
+  let bookingModel: { exists: ReturnType<typeof vi.fn> };
   let availabilityService: { findFreeRooms: ReturnType<typeof vi.fn> };
   let service: RoomsService;
 
@@ -36,11 +38,13 @@ describe('RoomsService', () => {
       findOne: vi.fn(),
     };
     availabilityModel = { exists: vi.fn(), deleteMany: vi.fn() };
+    bookingModel = { exists: vi.fn().mockResolvedValue(null) };
     availabilityService = { findFreeRooms: vi.fn() };
     service = new RoomsService(
       hotelModel as never,
       roomModel as never,
       availabilityModel as never,
+      bookingModel as never,
       availabilityService as never,
     );
   });
@@ -214,6 +218,25 @@ describe('RoomsService', () => {
       });
     });
 
+    // Added by Mohamed Hesham: HTL-06 test. A cancelled or expired booking frees its
+    // nights (bookingId back to null), but the room was still reserved once.
+    it('throws 409 when only a released (cancelled or expired) booking refers to the room', async () => {
+      hotelModel.exists.mockResolvedValue(true);
+      const deleteOne = vi.fn();
+      roomModel.findOne.mockResolvedValue({ _id: ROOM_ID, deleteOne });
+      availabilityModel.exists.mockResolvedValue(null); // nights are free again
+      bookingModel.exists.mockResolvedValue({ _id: 'booking' });
+
+      await expect(service.deleteRoom(HOTEL_ID, ROOM_ID)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(bookingModel.exists).toHaveBeenCalledWith({
+        'rooms.roomId': ROOM_ID,
+      });
+      expect(availabilityModel.deleteMany).not.toHaveBeenCalled();
+      expect(deleteOne).not.toHaveBeenCalled();
+    });
+
     it('deletes the availability rows before deleting the room', async () => {
       hotelModel.exists.mockResolvedValue(true);
       const calls: string[] = [];
@@ -240,6 +263,8 @@ describe('RoomsService', () => {
     const query = {
       startDate: new Date('2026-12-01T00:00:00Z'),
       endDate: new Date('2026-12-04T00:00:00Z'), // 3 nights
+      page: 1,
+      limit: 10,
     } as QueryFreeRoomsDto;
 
     it('throws 404 for an inactive hotel', async () => {
@@ -251,9 +276,10 @@ describe('RoomsService', () => {
 
     it('computes totalPrice for 3 nights x 99.99 without float drift', async () => {
       hotelModel.exists.mockResolvedValue(true);
-      availabilityService.findFreeRooms.mockResolvedValue([
-        { _id: ROOM_ID, name: 'Room 1', pricePerNight: 99.99 },
-      ]);
+      availabilityService.findFreeRooms.mockResolvedValue({
+        rooms: [{ _id: ROOM_ID, name: 'Room 1', pricePerNight: 99.99 }],
+        total: 1,
+      });
 
       const result = await service.findAvailableRooms(HOTEL_ID, query);
 
@@ -263,11 +289,43 @@ describe('RoomsService', () => {
 
     it('returns data: [] when no rooms are free', async () => {
       hotelModel.exists.mockResolvedValue(true);
-      availabilityService.findFreeRooms.mockResolvedValue([]);
+      availabilityService.findFreeRooms.mockResolvedValue({
+        rooms: [],
+        total: 0,
+      });
 
       const result = await service.findAvailableRooms(HOTEL_ID, query);
 
       expect(result.data).toEqual([]);
+    });
+
+    // Added by Mohamed Hesham: GEN-05 test.
+    it('passes page and limit on and returns pagination meta', async () => {
+      hotelModel.exists.mockResolvedValue(true);
+      availabilityService.findFreeRooms.mockResolvedValue({
+        rooms: [],
+        total: 23,
+      });
+
+      const result = await service.findAvailableRooms(HOTEL_ID, {
+        ...query,
+        page: 2,
+        limit: 10,
+      });
+
+      expect(availabilityService.findFreeRooms).toHaveBeenCalledWith(
+        HOTEL_ID,
+        query.startDate,
+        query.endDate,
+        2,
+        10,
+      );
+      expect(result.meta).toEqual({
+        total: 23,
+        page: 2,
+        limit: 10,
+        totalPages: 3,
+      });
     });
   });
 });
