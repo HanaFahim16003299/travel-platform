@@ -268,13 +268,22 @@ export class FlightBookingsService {
   }
 
   /**
-   * For Youssef: call after Stripe confirms payment.
-   * Returns the confirmed booking, or null if the hold already expired (then refund).
+   * For Youssef: call after Stripe confirms payment. Safe to call more than once for the
+   * same payment (Stripe may deliver a webhook twice). Review A2, Joumana Hozayen.
+   *
+   * Returns:
+   *  - the booking when it is now CONFIRMED by this payment, including when an earlier
+   *    call with the same paymentId already confirmed it (nothing is changed or re-sent);
+   *  - null only when the booking cannot be confirmed by this payment: it does not exist,
+   *    its hold expired, or it is in another final state (EXPIRED, CANCELLED, or already
+   *    paid by a different payment). Only then should the payment be refunded.
    */
   async confirmAfterPayment(bookingId: string, paymentId: string) {
     if (!isValidObjectId(bookingId)) return null;
     const b = await this.bookingModel.findById(bookingId);
     if (!b) return null;
+    if (b.status !== FlightBookingStatus.PENDING_PAYMENT)
+      return this.alreadyConfirmedBy(b, paymentId);
 
     for (let attempt = 0; attempt < 5; attempt++) {
       const ref = generateBookingReference();
@@ -302,7 +311,11 @@ export class FlightBookingsService {
           },
           { new: true },
         );
-        if (!confirmed) return null;
+        if (!confirmed) {
+          // Lost a race: a parallel delivery of the same webhook may have confirmed it.
+          const current = await this.bookingModel.findById(b._id);
+          return current ? this.alreadyConfirmedBy(current, paymentId) : null;
+        }
         await this.notify(
           confirmed.userId,
           NotificationType.BookingStateChanged,
@@ -325,6 +338,17 @@ export class FlightBookingsService {
     throw new InternalServerErrorException(
       'Could not generate a booking reference',
     );
+  }
+
+  /** The booking if this same payment already confirmed it, otherwise null. */
+  private alreadyConfirmedBy(b: FlightBookingDocument, paymentId: string) {
+    const confirmedStates = [
+      FlightBookingStatus.CONFIRMED,
+      FlightBookingStatus.COMPLETED,
+    ];
+    return confirmedStates.includes(b.status) && b.paymentId === paymentId
+      ? b
+      : null;
   }
 
   /** GEN-11: CONFIRMED -> COMPLETED once the last leg has departed. Called hourly. */

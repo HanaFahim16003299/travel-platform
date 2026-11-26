@@ -230,4 +230,70 @@ describe('FlightBookingsService', () => {
       expect(h.bookingModel.create).not.toHaveBeenCalled();
     });
   });
+
+  describe('confirmAfterPayment idempotency (PAY-01, review A2)', () => {
+    it('returns the booking unchanged when the same payment is delivered twice', async () => {
+      const b = bookingDoc({
+        status: FlightBookingStatus.CONFIRMED,
+        paymentId: 'pi_1',
+      });
+      h.bookingModel.findById.mockResolvedValue(b);
+
+      const result = await h.service.confirmAfterPayment(
+        b._id.toString(),
+        'pi_1',
+      );
+
+      expect(result).toBe(b);
+      expect(h.bookingModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(h.notifications.create).not.toHaveBeenCalled();
+    });
+
+    it('returns null for a confirmed booking paid by a different payment', async () => {
+      h.bookingModel.findById.mockResolvedValue(
+        bookingDoc({
+          status: FlightBookingStatus.CONFIRMED,
+          paymentId: 'pi_other',
+        }),
+      );
+      expect(
+        await h.service.confirmAfterPayment(
+          new Types.ObjectId().toString(),
+          'pi_1',
+        ),
+      ).toBeNull();
+    });
+
+    it('returns null when the hold expired', async () => {
+      h.bookingModel.findById.mockResolvedValue(
+        bookingDoc({ status: FlightBookingStatus.EXPIRED }),
+      );
+      expect(
+        await h.service.confirmAfterPayment(
+          new Types.ObjectId().toString(),
+          'pi_1',
+        ),
+      ).toBeNull();
+    });
+
+    it('returns the booking when a parallel delivery of the same payment won the race', async () => {
+      const pending = bookingDoc({
+        status: FlightBookingStatus.PENDING_PAYMENT,
+      });
+      const confirmed = {
+        ...pending,
+        status: FlightBookingStatus.CONFIRMED,
+        paymentId: 'pi_1',
+      };
+      h.bookingModel.findById
+        .mockResolvedValueOnce(pending)
+        .mockResolvedValueOnce(confirmed);
+      h.bookingModel.findOneAndUpdate.mockResolvedValue(null);
+
+      expect(
+        await h.service.confirmAfterPayment(pending._id.toString(), 'pi_1'),
+      ).toBe(confirmed);
+      expect(h.notifications.create).not.toHaveBeenCalled();
+    });
+  });
 });
