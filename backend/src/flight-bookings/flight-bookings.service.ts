@@ -227,7 +227,12 @@ export class FlightBookingsService implements OnModuleInit {
   // FLT-22: hold seats for 10 minutes -> PENDING_PAYMENT
   // ---------------------------------------------------------------------------
 
-  async hold(user: AuthUser, bookingId: string) {
+  async hold(user: AuthUser, bookingId: string, acceptPolicies: boolean) {
+    // PAY-02: the airline policies must be accepted before payment (review B2).
+    if (acceptPolicies !== true)
+      throw new BadRequestException(
+        'You must accept the airline baggage and cancellation policies before holding seats',
+      );
     if (!isValidObjectId(bookingId))
       throw new NotFoundException('Draft booking not found');
     const draft = await this.bookingModel.findOne({
@@ -245,7 +250,7 @@ export class FlightBookingsService implements OnModuleInit {
       });
 
     const minutes = Number(process.env.FLIGHT_HOLD_MINUTES ?? 10);
-    return this.seatHolds.holdDraft(draft, minutes);
+    return this.seatHolds.holdDraft(draft, minutes, new Date());
   }
 
   /** Called every minute by the scheduler. */
@@ -274,6 +279,7 @@ export class FlightBookingsService implements OnModuleInit {
       amount: b.totalPrice,
       currency: b.currency,
       holdExpiresAt: b.holdExpiresAt,
+      policyAcceptedAt: b.policyAcceptedAt ?? null,
     };
   }
 

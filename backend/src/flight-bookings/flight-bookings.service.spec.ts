@@ -330,4 +330,38 @@ describe('FlightBookingsService', () => {
       expect(h.notifications.create).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('hold policy acceptance (PAY-02, review B2)', () => {
+    it('refuses to hold seats when the policies are not accepted', async () => {
+      await expect(
+        h.service.hold(owner, new Types.ObjectId().toString(), false),
+      ).rejects.toThrow(
+        'You must accept the airline baggage and cancellation policies',
+      );
+      expect(h.bookingModel.findOne).not.toHaveBeenCalled();
+      expect(h.seatHolds.holdDraft).not.toHaveBeenCalled();
+    });
+
+    it('stores the acceptance time when holding', async () => {
+      const ids = stubFlight(h);
+      const draft = bookingDoc({
+        status: FlightBookingStatus.DRAFT,
+        segments: [
+          {
+            flightId: new Types.ObjectId(ids.flightId),
+            cabinId: new Types.ObjectId(ids.cabinId),
+          },
+        ],
+      });
+      h.bookingModel.findOne.mockResolvedValue(draft);
+      h.seatHolds.holdDraft.mockResolvedValue({
+        status: FlightBookingStatus.PENDING_PAYMENT,
+      });
+
+      await h.service.hold(owner, draft._id.toString(), true);
+
+      const acceptedAt = h.seatHolds.holdDraft.mock.calls[0][2];
+      expect(acceptedAt).toBeInstanceOf(Date);
+    });
+  });
 });

@@ -54,12 +54,13 @@ export class FlightBookingsController {
   @Auth(Role.User)
   @ApiOperation({
     summary:
-      'FLT-22: hold the seats for 10 minutes (status becomes PENDING_PAYMENT)',
+      'FLT-22 / PAY-02: accept the airline policies and hold the seats for 10 minutes (status becomes PENDING_PAYMENT)',
   })
+  @ApiBadRequestResponse({ description: 'Policies not accepted' })
   @ApiConflictResponse({ description: 'Not enough seats, or already on hold' })
   @ApiNotFoundResponse({ description: 'Draft not found' })
   hold(@CurrentUser() user: AuthUser, @Body() dto: HoldFlightBookingDto) {
-    return this.service.hold(user, dto.bookingId);
+    return this.service.hold(user, dto.bookingId, dto.acceptPolicies);
   }
 
   @Get()

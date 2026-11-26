@@ -111,6 +111,8 @@ export class FlightBooking {
   @Prop({ required: true }) currency: string;
 
   @Prop({ unique: true, sparse: true }) bookingReference?: string;
+  // PAY-02: when the user accepted the airline policies (review B2, Joumana Hozayen).
+  @Prop() policyAcceptedAt?: Date;
   @Prop() paymentId?: string;
   @Prop() confirmedAt?: Date;
   @Prop() cancelledAt?: Date;

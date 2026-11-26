@@ -12,6 +12,7 @@ type Pending = {
   cabinId: Types.ObjectId;
   count: number;
 };
+const ACCEPTED = new Date('2027-01-01T00:00:00Z');
 const leg = () => ({
   flightId: new Types.ObjectId(),
   cabinId: new Types.ObjectId(),
@@ -83,7 +84,7 @@ describe('SeatHoldService', () => {
       };
       stubUpdates(() => ({ status: FlightBookingStatus.PENDING_PAYMENT }));
 
-      await service.holdDraft(draft as never, 10);
+      await service.holdDraft(draft as never, 10, ACCEPTED);
 
       expect(flightsService.reserveSeats).toHaveBeenCalledTimes(2);
       expect(bookingModel.findOneAndUpdate).toHaveBeenCalledWith(
@@ -91,6 +92,7 @@ describe('SeatHoldService', () => {
         expect.objectContaining({
           $set: expect.objectContaining({
             status: FlightBookingStatus.PENDING_PAYMENT,
+            policyAcceptedAt: ACCEPTED,
           }),
         }),
         { new: true },
@@ -112,9 +114,9 @@ describe('SeatHoldService', () => {
           new ConflictException('Not enough seats are available'),
         );
 
-      await expect(service.holdDraft(draft as never, 10)).rejects.toThrow(
-        'Not enough seats are available',
-      );
+      await expect(
+        service.holdDraft(draft as never, 10, ACCEPTED),
+      ).rejects.toThrow('Not enough seats are available');
 
       expect(flightModel.updateOne).toHaveBeenCalledTimes(1);
       expect(flightModel.updateOne).toHaveBeenCalledWith(
@@ -132,9 +134,9 @@ describe('SeatHoldService', () => {
       };
       stubUpdates(() => null); // the other click already flipped the draft
 
-      await expect(service.holdDraft(draft as never, 10)).rejects.toThrow(
-        'already on hold',
-      );
+      await expect(
+        service.holdDraft(draft as never, 10, ACCEPTED),
+      ).rejects.toThrow('already on hold');
       expect(flightModel.updateOne).toHaveBeenCalledTimes(1);
     });
 
@@ -148,9 +150,9 @@ describe('SeatHoldService', () => {
         throw new Error('db down');
       });
 
-      await expect(service.holdDraft(draft as never, 10)).rejects.toThrow(
-        'db down',
-      );
+      await expect(
+        service.holdDraft(draft as never, 10, ACCEPTED),
+      ).rejects.toThrow('db down');
       expect(flightModel.updateOne).toHaveBeenCalledTimes(2);
       expect(pending).toHaveLength(0);
     });
@@ -166,9 +168,9 @@ describe('SeatHoldService', () => {
       stubUpdates(() => null);
       flightModel.updateOne.mockRejectedValue(new Error('flights down'));
 
-      await expect(service.holdDraft(draft as never, 10)).rejects.toThrow(
-        'already on hold',
-      );
+      await expect(
+        service.holdDraft(draft as never, 10, ACCEPTED),
+      ).rejects.toThrow('already on hold');
       expect(flightModel.updateOne).toHaveBeenCalledTimes(3); // retried
       expect(pending).toHaveLength(1); // re-queued, not lost
 
@@ -198,9 +200,9 @@ describe('SeatHoldService', () => {
       stubUpdates(() => null);
       bookingModel.updateOne.mockRejectedValue(new Error('db down'));
 
-      await expect(service.holdDraft(draft as never, 10)).rejects.toThrow(
-        'already on hold',
-      );
+      await expect(
+        service.holdDraft(draft as never, 10, ACCEPTED),
+      ).rejects.toThrow('already on hold');
       expect(flightModel.updateOne).toHaveBeenCalledTimes(1);
     });
 

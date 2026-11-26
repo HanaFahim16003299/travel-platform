@@ -54,7 +54,11 @@ export class SeatHoldService {
    * requests can never overbook. Legs already reserved are given back if a later step
    * fails, including when the status update itself throws (review A5).
    */
-  async holdDraft(draft: FlightBookingDocument, holdMinutes: number) {
+  async holdDraft(
+    draft: FlightBookingDocument,
+    holdMinutes: number,
+    policyAcceptedAt: Date,
+  ) {
     const reserved: Segment[] = [];
     try {
       for (const s of draft.segments) {
@@ -85,6 +89,7 @@ export class SeatHoldService {
           $set: {
             status: FlightBookingStatus.PENDING_PAYMENT,
             holdExpiresAt: new Date(Date.now() + holdMinutes * 60_000),
+            policyAcceptedAt,
           },
           $unset: { draftExpiresAt: 1 },
         },
