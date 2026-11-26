@@ -24,7 +24,7 @@ export class ImageUploadExceptionFilter
       });
     }
 
-    if (exception.message === 'Only JPEG, PNG and WebP images are allowed') {
+    if (exception.message === 'Only JPEG and PNG images are allowed') {
       return response.status(400).json({
         statusCode: 400,
         message: 'Only JPEG and PNG images are allowed',
