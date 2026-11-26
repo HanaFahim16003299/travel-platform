@@ -17,6 +17,7 @@ import { UpdateHotelDto } from './dto/update-hotel.dto.js';
 import { UpdatePoliciesDto } from './dto/update-policies.dto.js';
 import { AvailabilityService } from './availability/availability.service.js';
 import { QueryAvailabilityDto } from './dto/query-availability.dto.js';
+import { QueryHotelDetailsDto } from './dto/query-hotel-details.dto.js';
 
 @ApiTags('Hotels')
 @Controller('hotels')
@@ -34,9 +35,12 @@ export class HotelsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a hotel by id' })
-  findOne(@Param('id') id: string) {
-    return this.hotelsService.findOne(id);
+  // Changed by Mohamed Hesham: HTL-02, optional dates add the free rooms to the details.
+  @ApiOperation({
+    summary: 'Get a hotel by id, with its free rooms when dates are given',
+  })
+  findOne(@Param('id') id: string, @Query() query: QueryHotelDetailsDto) {
+    return this.hotelsService.findOne(id, query);
   }
   @Get(':id/availability')
   @ProviderScope(ProviderType.Hotel)

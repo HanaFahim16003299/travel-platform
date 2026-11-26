@@ -1,8 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsDate } from 'class-validator';
+import { TenPerPageQueryDto } from './ten-per-page-query.dto.js';
 
-export class QueryFreeRoomsDto {
+// Changed by Mohamed Hesham: GEN-05, page / limit (max 10) come from TenPerPageQueryDto.
+export class QueryFreeRoomsDto extends TenPerPageQueryDto {
   @ApiProperty({ example: '2026-12-01' })
   @Type(() => Date)
   @IsDate()

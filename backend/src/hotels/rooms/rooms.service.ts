@@ -12,11 +12,17 @@ import {
   RoomAvailability,
   RoomAvailabilityDocument,
 } from '../schemas/room-availability.schema.js';
+// Added by Mohamed Hesham: HTL-06.
+import {
+  HotelBooking,
+  HotelBookingDocument,
+} from '../../hotel-bookings/schemas/hotel-booking.schema.js';
 import { CreateRoomDto } from '../dto/create-room.dto.js';
 import { UpdateRoomDto } from '../dto/update-room.dto.js';
 import { QueryFreeRoomsDto } from '../dto/query-free-rooms.dto.js';
 import { AvailabilityService } from '../availability/availability.service.js';
 import { getNightsBetween } from '../utils/date-range.util.js';
+import { buildMeta } from '../../common/utils/pagination.js';
 
 @Injectable()
 export class RoomsService {
@@ -25,6 +31,9 @@ export class RoomsService {
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
     @InjectModel(RoomAvailability.name)
     private readonly availabilityModel: Model<RoomAvailabilityDocument>,
+    // Added by Mohamed Hesham: HTL-06.
+    @InjectModel(HotelBooking.name)
+    private readonly bookingModel: Model<HotelBookingDocument>,
     private readonly availabilityService: AvailabilityService,
   ) {}
 
@@ -58,10 +67,14 @@ export class RoomsService {
     });
     if (!hotel) throw new NotFoundException('Hotel not found');
 
-    const rooms = await this.availabilityService.findFreeRooms(
+    // Changed by Mohamed Hesham: GEN-05, one page of free rooms (page size 10).
+    const { page, limit } = query;
+    const { rooms, total } = await this.availabilityService.findFreeRooms(
       hotelId,
       query.startDate,
       query.endDate,
+      page,
+      limit,
     );
     const nights = getNightsBetween(query.startDate, query.endDate).length;
 
@@ -80,6 +93,7 @@ export class RoomsService {
         pricePerNight: room.pricePerNight,
         totalPrice: (Math.round(room.pricePerNight * 100) * nights) / 100,
       })),
+      meta: buildMeta(total, page, limit),
     };
   }
 
@@ -151,12 +165,17 @@ export class RoomsService {
     const room = await this.roomModel.findOne({ _id: roomId, hotelId });
     if (!room) throw new NotFoundException('Room not found');
 
-    // HTL-06: any booking, past or future, blocks deletion
-    const booked = await this.availabilityModel.exists({
-      roomId: room._id,
-      bookingId: { $ne: null },
-    });
-    if (booked) {
+    // HTL-06: a room that was ever reserved cannot be deleted.
+    // Changed by Mohamed Hesham: a cancelled or expired booking frees its nights, so the
+    // bookings themselves are checked too (any status counts).
+    const [booked, everReserved] = await Promise.all([
+      this.availabilityModel.exists({
+        roomId: room._id,
+        bookingId: { $ne: null },
+      }),
+      this.bookingModel.exists({ 'rooms.roomId': room._id }),
+    ]);
+    if (booked || everReserved) {
       throw new ConflictException(
         'Room has bookings; deactivate it instead of deleting',
       );

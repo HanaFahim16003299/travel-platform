@@ -6,6 +6,11 @@ import {
   RoomAvailability,
   RoomAvailabilitySchema,
 } from './schemas/room-availability.schema.js';
+// Added by Mohamed Hesham: HTL-08, lets the availability view read the booking reference.
+import {
+  HotelBooking,
+  HotelBookingSchema,
+} from '../hotel-bookings/schemas/hotel-booking.schema.js';
 import { HotelsService } from './hotels.service.js';
 import { HotelsController } from './hotels.controller.js';
 import { RoomsService } from './rooms/rooms.service.js';
@@ -21,6 +26,7 @@ import { HotelSearchController } from './search/hotel-search.controller.js';
       { name: Hotel.name, schema: HotelSchema },
       { name: Room.name, schema: RoomSchema },
       { name: RoomAvailability.name, schema: RoomAvailabilitySchema },
+      { name: HotelBooking.name, schema: HotelBookingSchema },
     ]),
   ],
   // lets other modules (admin, hotel-bookings) inject the Hotel/Room models

@@ -8,6 +8,7 @@ import { HotelsService } from './hotels.service.js';
 import type { CreateHotelDto } from './dto/create-hotel.dto.js';
 import type { UpdateHotelDto } from './dto/update-hotel.dto.js';
 import type { UpdatePoliciesDto } from './dto/update-policies.dto.js';
+import type { QueryHotelDetailsDto } from './dto/query-hotel-details.dto.js';
 
 const HOTEL_ID = '507f1f77bcf86cd799439011';
 const CITY_ID = '507f1f77bcf86cd799439022';
@@ -19,6 +20,8 @@ describe('HotelsService', () => {
     findOne: ReturnType<typeof vi.fn>;
     findOneAndUpdate: ReturnType<typeof vi.fn>;
   };
+  // Added by Mohamed Hesham: HTL-02.
+  let roomsService: { findAvailableRooms: ReturnType<typeof vi.fn> };
   let service: HotelsService;
 
   beforeEach(() => {
@@ -28,7 +31,8 @@ describe('HotelsService', () => {
       findOne: vi.fn(),
       findOneAndUpdate: vi.fn(),
     };
-    service = new HotelsService(hotelModel as never);
+    roomsService = { findAvailableRooms: vi.fn() };
+    service = new HotelsService(hotelModel as never, roomsService as never);
   });
 
   describe('create (HTL-01)', () => {
@@ -92,6 +96,69 @@ describe('HotelsService', () => {
         isActive: true,
       });
       expect(result).toBe(hotel);
+    });
+
+    // Added by Mohamed Hesham: HTL-02 tests.
+    const dates = {
+      startDate: new Date('2026-12-01T00:00:00Z'),
+      endDate: new Date('2026-12-04T00:00:00Z'),
+      page: 1,
+      limit: 10,
+    } as QueryHotelDetailsDto;
+
+    it('does not look up rooms when no dates are given', async () => {
+      hotelModel.findOne.mockReturnValue(leanResult({ _id: HOTEL_ID }));
+
+      const result = await service.findOne(HOTEL_ID, {
+        page: 1,
+        limit: 10,
+      } as QueryHotelDetailsDto);
+
+      expect(roomsService.findAvailableRooms).not.toHaveBeenCalled();
+      expect(result).not.toHaveProperty('availableRooms');
+    });
+
+    it('adds availableRooms from the room search when both dates are given', async () => {
+      const rooms = {
+        nights: 3,
+        data: [{ name: 'Room 1' }],
+        meta: { total: 1 },
+      };
+      hotelModel.findOne.mockReturnValue(leanResult({ _id: HOTEL_ID }));
+      roomsService.findAvailableRooms.mockResolvedValue(rooms);
+
+      const result = await service.findOne(HOTEL_ID, dates);
+
+      expect(roomsService.findAvailableRooms).toHaveBeenCalledWith(
+        HOTEL_ID,
+        expect.objectContaining({
+          startDate: dates.startDate,
+          endDate: dates.endDate,
+          page: 1,
+          limit: 10,
+        }),
+      );
+      expect(result).toEqual({ _id: HOTEL_ID, availableRooms: rooms });
+    });
+
+    it('throws 400 when only one date is given, without querying', async () => {
+      await expect(
+        service.findOne(HOTEL_ID, {
+          startDate: dates.startDate,
+          page: 1,
+          limit: 10,
+        } as QueryHotelDetailsDto),
+      ).rejects.toThrow(BadRequestException);
+      expect(hotelModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('throws 404 and looks up no rooms when the hotel is unknown', async () => {
+      hotelModel.findOne.mockReturnValue(leanResult(null));
+
+      await expect(service.findOne(HOTEL_ID, dates)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(roomsService.findAvailableRooms).not.toHaveBeenCalled();
     });
   });
 
