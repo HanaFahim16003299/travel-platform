@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Airline, AirlineSchema } from '../airlines/schemas/airline.schema.js';
+import {
+  FlightBooking,
+  FlightBookingSchema,
+} from '../flight-bookings/schemas/flight-booking.schema.js';
 import { Flight, FlightSchema } from './schemas/flight.schema.js';
 import { FlightsController } from './flights.controller.js';
 import { FlightsService } from './flights.service.js';
@@ -11,6 +15,8 @@ import { FlightCancellationHooks } from './flight-cancellation.hooks.js';
     MongooseModule.forFeature([
       { name: Flight.name, schema: FlightSchema },
       { name: Airline.name, schema: AirlineSchema },
+      // FLT-29 moderator views read bookings through the typed model (review A4/D2).
+      { name: FlightBooking.name, schema: FlightBookingSchema },
     ]),
   ],
   controllers: [FlightsController],

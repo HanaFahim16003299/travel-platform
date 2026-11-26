@@ -1,4 +1,4 @@
-import type { Connection, Model } from 'mongoose';
+import type { Model } from 'mongoose';
 import { FlightsService } from './flights.service.js';
 import { SearchFlightsDto } from './dto/search-flights.dto.js';
 import { AirlineDocument } from '../airlines/schemas/airline.schema.js';
@@ -17,7 +17,7 @@ describe('FlightsService', () => {
   const service = new FlightsService(
     flightModel as unknown as Model<FlightDocument>,
     airlineModel as unknown as Model<AirlineDocument>,
-    {} as unknown as Connection,
+    {} as never,
   );
   const departureAirportId = '507f1f77bcf86cd799439011';
   const arrivalAirportId = '507f1f77bcf86cd799439012';

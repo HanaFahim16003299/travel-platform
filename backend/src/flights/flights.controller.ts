@@ -8,7 +8,7 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiProduces, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Auth, CurrentUser } from '../auth/decorators.js';
 import type { AuthUser } from '../auth/decorators.js';
@@ -81,6 +81,11 @@ export class FlightsController {
 
   @Get(':id/bookings')
   @Auth(Role.AirlineModerator, Role.Admin)
+  // Swagger text updated by Joumana Hozayen (review A4).
+  @ApiOperation({
+    summary:
+      "FLT-29: confirmed and cancelled bookings on this flight (outbound or return leg): reference, passenger names, cabin, seats and status. Only the flight's airline moderator or an admin.",
+  })
   bookings(
     @Param('id') id: string,
     @Query() query: PaginationQueryDto,
@@ -91,6 +96,11 @@ export class FlightsController {
 
   @Get(':id/passengers/export')
   @Auth(Role.AirlineModerator, Role.Admin)
+  @ApiProduces('text/csv')
+  @ApiOperation({
+    summary:
+      'FLT-29: CSV of passengers on this flight (confirmed and cancelled bookings): bookingReference, status, cabin, seats, firstName, lastName, type, ticketNumber.',
+  })
   exportPassengers(
     @Param('id') id: string,
     @CurrentUser() user: AuthUser,
