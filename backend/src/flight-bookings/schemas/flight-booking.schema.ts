@@ -16,7 +16,8 @@ export class Passenger {
   @Prop({ required: true, trim: true }) lastName: string;
   @Prop({ required: true }) dateOfBirth: Date;
   @Prop({ required: true, trim: true }) documentNumber: string;
-  @Prop({ type: String, enum: PassengerType, required: true }) type: PassengerType;
+  @Prop({ type: String, enum: PassengerType, required: true })
+  type: PassengerType;
   @Prop() email?: string;
   @Prop() phone?: string;
   @Prop({ default: 0, min: 0 }) extraBags: number;
@@ -30,12 +31,16 @@ const PassengerSchema = SchemaFactory.createForClass(Passenger);
  */
 @Schema({ _id: false })
 export class Segment {
-  @Prop({ type: Types.ObjectId, ref: 'Flight', required: true }) flightId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Flight', required: true })
+  flightId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, required: true }) cabinId: Types.ObjectId;
-  @Prop({ type: Types.ObjectId, ref: 'Airline', required: true }) airlineId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Airline', required: true })
+  airlineId: Types.ObjectId;
   @Prop({ required: true }) flightNumber: string;
-  @Prop({ type: Types.ObjectId, required: true }) departureAirportId: Types.ObjectId;
-  @Prop({ type: Types.ObjectId, required: true }) arrivalAirportId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true })
+  departureAirportId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true })
+  arrivalAirportId: Types.ObjectId;
   @Prop({ required: true }) departureAt: Date;
   @Prop({ required: true }) arrivalAt: Date;
   @Prop({ required: true }) cabinClass: string;
@@ -49,7 +54,8 @@ export class Segment {
 
   // Cancellation snapshot: tiers (FLT-09) if the airline has them,
   // otherwise the airline's single-rule policy.
-  @Prop({ type: [CancellationTierSchema], default: [] }) cancellationTiers: CancellationTier[];
+  @Prop({ type: [CancellationTierSchema], default: [] })
+  cancellationTiers: CancellationTier[];
   @Prop({ default: false }) refundable: boolean;
   @Prop({ default: 0 }) refundPercentage: number;
   @Prop({ default: 0 }) cancellationFee: number;
@@ -73,7 +79,12 @@ export class FlightBooking {
   @Prop({ type: [PassengerSchema], required: true }) passengers: Passenger[];
   @Prop({ required: true, min: 1 }) seatCount: number; // adults + children (infants take no seat)
 
-  @Prop({ type: String, enum: FlightBookingStatus, default: FlightBookingStatus.DRAFT, index: true })
+  @Prop({
+    type: String,
+    enum: FlightBookingStatus,
+    default: FlightBookingStatus.DRAFT,
+    index: true,
+  })
   status: FlightBookingStatus;
 
   @Prop() draftExpiresAt?: Date;

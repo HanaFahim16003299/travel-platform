@@ -6,17 +6,27 @@ import { FlightBookingsService } from './flight-bookings.service.js';
 import { FlightBookingsScheduler } from './flight-bookings.scheduler.js';
 import { ETicketService } from './e-ticket.service.js';
 import { SeatHoldService } from './seat-hold.service.js';
-import { FlightBooking, FlightBookingSchema } from './schemas/flight-booking.schema.js';
+import {
+  FlightBooking,
+  FlightBookingSchema,
+} from './schemas/flight-booking.schema.js';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: FlightBooking.name, schema: FlightBookingSchema }]),
+    MongooseModule.forFeature([
+      { name: FlightBooking.name, schema: FlightBookingSchema },
+    ]),
     // Gives us FlightsService.reserveSeats plus the Flight and Airline models.
     // NotificationsModule and AuthModule are @Global, so no import is needed for them.
     FlightsModule,
   ],
   controllers: [FlightBookingsController],
-  providers: [FlightBookingsService, SeatHoldService, FlightBookingsScheduler, ETicketService],
+  providers: [
+    FlightBookingsService,
+    SeatHoldService,
+    FlightBookingsScheduler,
+    ETicketService,
+  ],
   exports: [FlightBookingsService], // Youssef (payments), Habiba (ACC-12), Mahmoud (FLT-06)
 })
 export class FlightBookingsModule {}

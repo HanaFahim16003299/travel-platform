@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  Res,
+  StreamableFile,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -29,17 +39,23 @@ export class FlightBookingsController {
   @Post()
   @Auth(Role.User)
   @ApiOperation({
-    summary: 'FLT-19 / FLT-21: enter passengers and extra bags, get the booking summary (no seats held yet)',
+    summary:
+      'FLT-19 / FLT-21: enter passengers and extra bags, get the booking summary (no seats held yet)',
   })
   @ApiBadRequestResponse({ description: 'Passenger rules or bag limit broken' })
-  @ApiConflictResponse({ description: 'Flight not bookable or not enough seats' })
+  @ApiConflictResponse({
+    description: 'Flight not bookable or not enough seats',
+  })
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateFlightBookingDto) {
     return this.service.createDraft(user, dto);
   }
 
   @Post('hold')
   @Auth(Role.User)
-  @ApiOperation({ summary: 'FLT-22: hold the seats for 10 minutes (status becomes PENDING_PAYMENT)' })
+  @ApiOperation({
+    summary:
+      'FLT-22: hold the seats for 10 minutes (status becomes PENDING_PAYMENT)',
+  })
   @ApiConflictResponse({ description: 'Not enough seats, or already on hold' })
   @ApiNotFoundResponse({ description: 'Draft not found' })
   hold(@CurrentUser() user: AuthUser, @Body() dto: HoldFlightBookingDto) {
@@ -48,7 +64,9 @@ export class FlightBookingsController {
 
   @Get()
   @Auth(Role.User)
-  @ApiOperation({ summary: 'FLT-25: my flight bookings (group = upcoming / past / cancelled)' })
+  @ApiOperation({
+    summary: 'FLT-25: my flight bookings (group = upcoming / past / cancelled)',
+  })
   list(@CurrentUser() user: AuthUser, @Query() q: ListFlightBookingsQueryDto) {
     return this.service.listMine(user, q);
   }
@@ -56,7 +74,9 @@ export class FlightBookingsController {
   @Get(':id/e-ticket')
   @Auth(Role.User, Role.Admin, Role.AirlineModerator)
   @ApiProduces('application/pdf')
-  @ApiOperation({ summary: 'FLT-23: download the PDF e-ticket (confirmed bookings only)' })
+  @ApiOperation({
+    summary: 'FLT-23: download the PDF e-ticket (confirmed bookings only)',
+  })
   @ApiConflictResponse({ description: 'Booking is not confirmed' })
   async eTicketPdf(
     @CurrentUser() user: AuthUser,
@@ -74,14 +94,19 @@ export class FlightBookingsController {
 
   @Get(':id/cancellation-quote')
   @Auth(Role.User)
-  @ApiOperation({ summary: 'FLT-26: see the refund you would get before cancelling' })
+  @ApiOperation({
+    summary: 'FLT-26: see the refund you would get before cancelling',
+  })
   quote(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.service.cancellationQuote(user, id);
   }
 
   @Get(':id')
   @Auth(Role.User, Role.Admin, Role.AirlineModerator)
-  @ApiOperation({ summary: "FLT-25 / ACC-11: booking details (owner, admin, or that airline's moderator)" })
+  @ApiOperation({
+    summary:
+      "FLT-25 / ACC-11: booking details (owner, admin, or that airline's moderator)",
+  })
   @ApiNotFoundResponse({ description: 'Booking not found' })
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.service.findOneFor(user, id);
@@ -90,7 +115,10 @@ export class FlightBookingsController {
   @Post(':id/cancel')
   @HttpCode(200)
   @Auth(Role.User)
-  @ApiOperation({ summary: 'FLT-26: cancel a confirmed booking before departure (tier-based refund)' })
+  @ApiOperation({
+    summary:
+      'FLT-26: cancel a confirmed booking before departure (tier-based refund)',
+  })
   @ApiConflictResponse({ description: 'Not confirmed, or already departed' })
   cancel(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.service.cancel(user, id);
@@ -103,8 +131,14 @@ export class FlightBookingsController {
   @Post(':id/dev-confirm')
   @HttpCode(200)
   @Auth(Role.Admin)
-  @ApiOperation({ summary: 'DEV ONLY: simulate a successful payment (remove when payments are ready)' })
+  @ApiOperation({
+    summary:
+      'DEV ONLY: simulate a successful payment (remove when payments are ready)',
+  })
   devConfirm(@Param('id') id: string) {
-    return this.service.confirmAfterPayment(id, `dev_${new Types.ObjectId().toString()}`);
+    return this.service.confirmAfterPayment(
+      id,
+      `dev_${new Types.ObjectId().toString()}`,
+    );
   }
 }
