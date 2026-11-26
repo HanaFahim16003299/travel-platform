@@ -63,6 +63,7 @@ describe('HotelReservationsService.findForHotel', () => {
     for (const secret of ['paymentId', 'policies', 'refund']) {
       expect(selected).not.toContain(secret);
     }
+    expect(selected).toContain('bookingReference');
   });
 
   it('rejects an invalid hotel id without querying', async () => {

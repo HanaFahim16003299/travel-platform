@@ -37,7 +37,7 @@ export class HotelReservationsService {
       this.bookingModel
         .find(filter)
         .select(
-          'userId rooms checkIn checkOut nights guests totalPrice status confirmedAt createdAt',
+          'userId bookingReference rooms checkIn checkOut nights guests totalPrice status confirmedAt createdAt',
         )
         .populate('userId', 'firstName lastName')
         .sort({ checkIn: -1, _id: -1 })
