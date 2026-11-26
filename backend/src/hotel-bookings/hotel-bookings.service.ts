@@ -1,15 +1,13 @@
-
 import {
   Injectable,
   BadRequestException,
   NotFoundException,
   ConflictException,
+  InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 
-import {
-  InjectModel,
-  InjectConnection,
-} from '@nestjs/mongoose';
+import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 
 import type { Model, Connection } from 'mongoose';
 
@@ -18,15 +16,9 @@ import {
   HotelBookingDocument,
 } from './schemas/hotel-booking.schema.js';
 
-import {
-  Hotel,
-  HotelDocument,
-} from '../hotels/schemas/hotel.schema.js';
+import { Hotel, HotelDocument } from '../hotels/schemas/hotel.schema.js';
 
-import {
-  Room,
-  RoomDocument,
-} from '../hotels/schemas/room.schema.js';
+import { Room, RoomDocument } from '../hotels/schemas/room.schema.js';
 
 import {
   RoomAvailability,
@@ -43,11 +35,17 @@ import { BookingStatus } from './enums/booking-status.enum.js';
 
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
 import { buildMeta } from '../common/utils/pagination.js';
+import { generateBookingReference } from '../common/utils/booking-reference.js';
+import {
+  HOTEL_HOLD_MINUTES,
+  MAX_BOOKING_REFERENCE_ATTEMPTS,
+} from './constants.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
+import { NotificationType } from '../notifications/notification-types.js';
 
 @Injectable()
 export class HotelBookingsService {
-  // Placeholder until confirmed against Excel requirements
-  private readonly holdDurationMinutes = 15;
+  private readonly logger = new Logger(HotelBookingsService.name);
 
   constructor(
     @InjectModel(HotelBooking.name)
@@ -60,11 +58,12 @@ export class HotelBookingsService {
     private readonly roomModel: Model<RoomDocument>,
 
     @InjectModel(RoomAvailability.name)
-    private readonly availabilityModel:
-      Model<RoomAvailabilityDocument>,
+    private readonly availabilityModel: Model<RoomAvailabilityDocument>,
 
     @InjectConnection()
     private readonly connection: Connection,
+
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ==========================================
@@ -84,28 +83,33 @@ export class HotelBookingsService {
     assertNotInPast(nights[0]);
 
     // Validate selected rooms
-    if (!Array.isArray(dto.roomIds) || dto.roomIds.length === 0) {
-      throw new BadRequestException(
-        'At least one room must be selected',
-      );
+    if (!Array.isArray(dto.rooms) || dto.rooms.length === 0) {
+      throw new BadRequestException('At least one room must be selected');
     }
 
-    // Validate and normalize room IDs
-    const roomIds = dto.roomIds.map((id) =>
-      this.validateId(id, 'room'),
-    );
+    // Validate and normalize room selections
+    const roomSelections = dto.rooms.map((selection) => ({
+      roomId: this.validateId(selection.roomId, 'room'),
+      adults: selection.adults,
+      childrenAges: selection.childrenAges,
+    }));
+
+    const roomIds = roomSelections.map((selection) => selection.roomId);
 
     // Prevent duplicate room selection
     if (new Set(roomIds).size !== roomIds.length) {
-      throw new BadRequestException(
-        'Duplicate room IDs are not allowed',
-      );
+      throw new BadRequestException('Duplicate room IDs are not allowed');
     }
 
-    // Validate number of guests
-    if (!Number.isInteger(dto.guests) || dto.guests < 1) {
+    // At least one adult is required across the whole reservation
+    const totalAdults = roomSelections.reduce(
+      (sum, selection) => sum + selection.adults,
+      0,
+    );
+
+    if (totalAdults < 1) {
       throw new BadRequestException(
-        'Number of guests must be a positive integer',
+        'At least one adult is required across the reservation',
       );
     }
 
@@ -122,9 +126,7 @@ export class HotelBookingsService {
           .session(session);
 
         if (!hotel) {
-          throw new NotFoundException(
-            'Hotel not found or inactive',
-          );
+          throw new NotFoundException('Hotel not found or inactive');
         }
 
         // Find selected rooms
@@ -143,45 +145,49 @@ export class HotelBookingsService {
           );
         }
 
-        // Calculate total room capacity
-        const totalCapacity = rooms.reduce(
-          (sum, room) =>
-            sum + room.maxAdults + room.maxChildren,
-          0,
+        const roomsById = new Map(
+          rooms.map((room) => [String(room._id), room]),
         );
 
-        if (dto.guests > totalCapacity) {
-          throw new BadRequestException(
-            'Selected rooms do not have enough capacity',
-          );
+        // No room's guests may exceed its maximum occupancy
+        for (const selection of roomSelections) {
+          const room = roomsById.get(selection.roomId)!;
+          const occupancy = selection.adults + selection.childrenAges.length;
+          const maxOccupancy = room.maxAdults + room.maxChildren;
+
+          if (occupancy > maxOccupancy) {
+            throw new BadRequestException(
+              `Room "${room.name}" cannot hold ${occupancy} guest(s) (maximum ${maxOccupancy})`,
+            );
+          }
         }
+
+        // Guests is the derived total across every room
+        const guests = roomSelections.reduce(
+          (sum, selection) =>
+            sum + selection.adults + selection.childrenAges.length,
+          0,
+        );
 
         // Calculate total price using integer cents
         const nightlyPriceInCents = rooms.reduce(
-          (sum, room) =>
-            sum + Math.round(room.pricePerNight * 100),
+          (sum, room) => sum + Math.round(room.pricePerNight * 100),
           0,
         );
 
-        const totalPriceInCents =
-          nightlyPriceInCents * nights.length;
+        const totalPriceInCents = nightlyPriceInCents * nights.length;
 
         if (
           !Number.isSafeInteger(totalPriceInCents) ||
           totalPriceInCents <= 0
         ) {
-          throw new BadRequestException(
-            'Invalid booking price',
-          );
+          throw new BadRequestException('Invalid booking price');
         }
 
         const totalPrice = totalPriceInCents / 100;
 
         // Calculate booking expiration deadline
-        const expiresAt = new Date(
-          Date.now() +
-            this.holdDurationMinutes * 60 * 1000,
-        );
+        const expiresAt = new Date(Date.now() + HOTEL_HOLD_MINUTES * 60 * 1000);
 
         // Construct booking document
         // Mongoose automatically generates its ObjectId
@@ -189,16 +195,21 @@ export class HotelBookingsService {
           userId: userObjectId,
           hotelId,
 
-          rooms: rooms.map((room) => ({
-            roomId: room._id,
-            roomName: room.name,
-            pricePerNight: room.pricePerNight,
-          })),
+          rooms: roomSelections.map((selection) => {
+            const room = roomsById.get(selection.roomId)!;
+            return {
+              roomId: room._id,
+              roomName: room.name,
+              pricePerNight: room.pricePerNight,
+              adults: selection.adults,
+              childrenAges: selection.childrenAges,
+            };
+          }),
 
           checkIn,
           checkOut,
           nights: nights.length,
-          guests: dto.guests,
+          guests,
 
           totalPrice,
           currency: 'USD',
@@ -223,8 +234,7 @@ export class HotelBookingsService {
         });
 
         // Calculate the number of required room-night records
-        const expectedRecords =
-          roomIds.length * nights.length;
+        const expectedRecords = roomIds.length * nights.length;
 
         // Atomically reserve every selected room-night
         const result = await this.availabilityModel.updateMany(
@@ -264,18 +274,10 @@ export class HotelBookingsService {
   // HTL-20: LIST USER BOOKINGS
   // ==========================================
 
-  async findAll(
-    userId: string,
-    query: PaginationQueryDto,
-  ) {
+  async findAll(userId: string, query: PaginationQueryDto) {
     const userObjectId = this.validateId(userId, 'user');
 
-    const {
-      page = 1,
-      limit = 10,
-      sort,
-      order,
-    } = query;
+    const { page = 1, limit = 10, sort, order } = query;
 
     // Validate pagination
     if (
@@ -285,9 +287,7 @@ export class HotelBookingsService {
       limit < 1 ||
       limit > 100
     ) {
-      throw new BadRequestException(
-        'Invalid pagination parameters',
-      );
+      throw new BadRequestException('Invalid pagination parameters');
     }
 
     // Restrict sorting to valid booking fields
@@ -300,22 +300,16 @@ export class HotelBookingsService {
     ];
 
     if (sort && !allowedSortFields.includes(sort)) {
-      throw new BadRequestException(
-        'Invalid sorting field',
-      );
+      throw new BadRequestException('Invalid sorting field');
     }
 
     if (order && order !== 'asc' && order !== 'desc') {
-      throw new BadRequestException(
-        'Invalid sorting order',
-      );
+      throw new BadRequestException('Invalid sorting order');
     }
 
     const sortField = sort ?? 'createdAt';
 
-    const direction: 1 | -1 = sort
-    ? (order === 'asc' ? 1 : -1)
-    : -1;
+    const direction: 1 | -1 = sort ? (order === 'asc' ? 1 : -1) : -1;
 
     // Only retrieve bookings belonging to this user
     const filter = {
@@ -347,16 +341,10 @@ export class HotelBookingsService {
   // HTL-20: VIEW SPECIFIC BOOKING
   // ==========================================
 
-  async findOne(
-    userId: string,
-    bookingId: string,
-  ) {
+  async findOne(userId: string, bookingId: string) {
     const userObjectId = this.validateId(userId, 'user');
 
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
     const booking = await this.bookingModel
       .findOne({
@@ -367,9 +355,7 @@ export class HotelBookingsService {
       .lean();
 
     if (!booking) {
-      throw new NotFoundException(
-        'Booking not found',
-      );
+      throw new NotFoundException('Booking not found');
     }
 
     return booking;
@@ -379,16 +365,10 @@ export class HotelBookingsService {
   // HTL-21, PAY-03: CANCEL HOTEL BOOKING
   // ==========================================
 
-  async cancel(
-    userId: string,
-    bookingId: string,
-  ) {
+  async cancel(userId: string, bookingId: string) {
     const userObjectId = this.validateId(userId, 'user');
 
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
     const session = await this.connection.startSession();
 
@@ -403,9 +383,7 @@ export class HotelBookingsService {
           .session(session);
 
         if (!booking) {
-          throw new NotFoundException(
-            'Booking not found',
-          );
+          throw new NotFoundException('Booking not found');
         }
 
         // Prevent duplicate cancellations and refunds
@@ -425,9 +403,7 @@ export class HotelBookingsService {
 
         // Expired bookings cannot be cancelled
         if (booking.status === BookingStatus.Expired) {
-          throw new BadRequestException(
-            'Expired bookings cannot be cancelled',
-          );
+          throw new BadRequestException('Expired bookings cannot be cancelled');
         }
 
         // Only pending and confirmed bookings are eligible
@@ -435,9 +411,7 @@ export class HotelBookingsService {
           booking.status !== BookingStatus.PendingPayment &&
           booking.status !== BookingStatus.Confirmed
         ) {
-          throw new BadRequestException(
-            'This booking cannot be cancelled',
-          );
+          throw new BadRequestException('This booking cannot be cancelled');
         }
 
         const now = new Date();
@@ -450,22 +424,16 @@ export class HotelBookingsService {
           );
         }
 
-        const wasConfirmed =
-          booking.status === BookingStatus.Confirmed;
+        const wasConfirmed = booking.status === BookingStatus.Confirmed;
 
         let refundAmount = 0;
         let refundPercent = 0;
 
         // Calculate refund for confirmed bookings
         if (wasConfirmed) {
-          refundPercent = this.calculateRefundPercent(
-            booking,
-            now,
-          );
+          refundPercent = this.calculateRefundPercent(booking, now);
 
-          const totalPriceInCents = Math.round(
-            booking.totalPrice * 100,
-          );
+          const totalPriceInCents = Math.round(booking.totalPrice * 100);
 
           const refundInCents = Math.round(
             (totalPriceInCents * refundPercent) / 100,
@@ -482,13 +450,9 @@ export class HotelBookingsService {
         booking.refundAmount = refundAmount;
         booking.refundPercent = refundPercent;
 
-        booking.refundStatus =
-          refundAmount > 0
-            ? 'Pending'
-            : 'Not Required';
+        booking.refundStatus = refundAmount > 0 ? 'Pending' : 'Not Required';
 
-        booking.refundRequestedAt =
-          refundAmount > 0 ? now : null;
+        booking.refundRequestedAt = refundAmount > 0 ? now : null;
 
         await booking.save({ session });
 
@@ -532,69 +496,62 @@ export class HotelBookingsService {
   // ==========================================
 
   async confirmBooking(bookingId: string) {
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
-    const session = await this.connection.startSession();
+    let confirmedBooking: HotelBookingDocument | undefined;
+    let alreadyConfirmed = false;
 
-    try {
-      return await session.withTransaction(async () => {
-        const booking = await this.bookingModel
-          .findById(bookingObjectId)
-          .session(session);
+    // A duplicate bookingReference aborts the whole transaction, so the
+    // entire attempt (not just the reference write) is retried.
+    for (
+      let attempt = 1;
+      attempt <= MAX_BOOKING_REFERENCE_ATTEMPTS;
+      attempt++
+    ) {
+      const session = await this.connection.startSession();
 
-        if (!booking) {
-          throw new NotFoundException(
-            'Booking not found',
-          );
-        }
+      try {
+        const result = await session.withTransaction(async () => {
+          const booking = await this.bookingModel
+            .findById(bookingObjectId)
+            .session(session);
 
-        // Prevent duplicate confirmation
-        if (booking.status === BookingStatus.Confirmed) {
-          return booking;
-        }
+          if (!booking) {
+            throw new NotFoundException('Booking not found');
+          }
 
-        // Only pending bookings may be confirmed
-        if (booking.status !== BookingStatus.PendingPayment) {
-          throw new ConflictException(
-            'Only pending bookings can be confirmed',
-          );
-        }
+          // Prevent duplicate confirmation
+          if (booking.status === BookingStatus.Confirmed) {
+            return { booking, alreadyConfirmed: true };
+          }
 
-        // Verify expiration deadline
-        if (
-          !booking.expiresAt ||
-          booking.expiresAt.getTime() <= Date.now()
-        ) {
-          throw new ConflictException(
-            'Booking payment deadline has expired',
-          );
-        }
+          // Only pending bookings may be confirmed
+          if (booking.status !== BookingStatus.PendingPayment) {
+            throw new ConflictException(
+              'Only pending bookings can be confirmed',
+            );
+          }
 
-        // Ensure that policies were accepted before payment
-        if (!booking.policyAcceptedAt) {
-          throw new ConflictException(
-            'Booking policies have not been accepted',
-          );
-        }
+          // Verify expiration deadline
+          if (!booking.expiresAt || booking.expiresAt.getTime() <= Date.now()) {
+            throw new ConflictException('Booking payment deadline has expired');
+          }
 
-        // Verify the exact reserved room-night records
-        const nights = getNightsBetween(
-          booking.checkIn,
-          booking.checkOut,
-        );
+          // Ensure that policies were accepted before payment
+          if (!booking.policyAcceptedAt) {
+            throw new ConflictException(
+              'Booking policies have not been accepted',
+            );
+          }
 
-        const roomIds = booking.rooms.map(
-          (room) => room.roomId,
-        );
+          // Verify the exact reserved room-night records
+          const nights = getNightsBetween(booking.checkIn, booking.checkOut);
 
-        const expectedRecords =
-          roomIds.length * nights.length;
+          const roomIds = booking.rooms.map((room) => room.roomId);
 
-        const reservedRecords =
-          await this.availabilityModel
+          const expectedRecords = roomIds.length * nights.length;
+
+          const reservedRecords = await this.availabilityModel
             .countDocuments({
               bookingId: booking._id,
               hotelId: booking.hotelId,
@@ -604,20 +561,87 @@ export class HotelBookingsService {
             })
             .session(session);
 
-        if (reservedRecords !== expectedRecords) {
-          throw new ConflictException(
-            'Booking inventory is no longer available',
+          if (reservedRecords !== expectedRecords) {
+            throw new ConflictException(
+              'Booking inventory is no longer available',
+            );
+          }
+
+          // Confirm booking
+          booking.status = BookingStatus.Confirmed;
+          booking.confirmedAt = new Date();
+          booking.bookingReference = generateBookingReference();
+
+          const saved = await booking.save({ session });
+          return { booking: saved, alreadyConfirmed: false };
+        });
+
+        confirmedBooking = result.booking;
+        alreadyConfirmed = result.alreadyConfirmed;
+        break;
+      } catch (error) {
+        if (this.isDuplicateKeyError(error)) {
+          if (attempt < MAX_BOOKING_REFERENCE_ATTEMPTS) {
+            continue;
+          }
+
+          throw new InternalServerErrorException(
+            'Could not generate a booking reference',
           );
         }
 
-        // Confirm booking
-        booking.status = BookingStatus.Confirmed;
-        booking.confirmedAt = new Date();
+        throw error;
+      } finally {
+        await session.endSession();
+      }
+    }
 
-        return await booking.save({ session });
+    if (!confirmedBooking) {
+      // Unreachable: the loop above always returns, breaks or throws.
+      throw new InternalServerErrorException(
+        'Could not generate a booking reference',
+      );
+    }
+
+    // Sent only once the transaction has committed, so a notification
+    // failure can never roll back or fail the confirmation itself.
+    if (!alreadyConfirmed) {
+      await this.notifyConfirmed(confirmedBooking);
+    }
+
+    return confirmedBooking;
+  }
+
+  // ==========================================
+  // HELPER: NOTIFY USER OF CONFIRMATION (HTL-17)
+  // ==========================================
+
+  private async notifyConfirmed(booking: HotelBookingDocument): Promise<void> {
+    try {
+      const hotel = await this.hotelModel
+        .findById(booking.hotelId)
+        .select('name')
+        .lean();
+
+      const hotelName = hotel?.name ?? 'your hotel';
+      const checkIn = booking.checkIn.toISOString().slice(0, 10);
+      const checkOut = booking.checkOut.toISOString().slice(0, 10);
+
+      await this.notifications.create({
+        userId: String(booking.userId),
+        type: NotificationType.BookingStateChanged,
+        title: 'Hotel booking confirmed',
+        message:
+          `Your booking ${booking.bookingReference} at ${hotelName} ` +
+          `(${checkIn} to ${checkOut}) is confirmed. ` +
+          `Total: ${booking.totalPrice} ${booking.currency}.`,
+        referenceType: 'hotel_booking',
+        referenceId: String(booking._id),
       });
-    } finally {
-      await session.endSession();
+    } catch (error) {
+      this.logger.error(
+        `Notification failed for booking ${String(booking._id)}: ${String(error)}`,
+      );
     }
   }
 
@@ -626,10 +650,7 @@ export class HotelBookingsService {
   // ==========================================
 
   async expireBooking(bookingId: string) {
-    const bookingObjectId = this.validateId(
-      bookingId,
-      'booking',
-    );
+    const bookingObjectId = this.validateId(bookingId, 'booking');
 
     const session = await this.connection.startSession();
 
@@ -640,9 +661,7 @@ export class HotelBookingsService {
           .session(session);
 
         if (!booking) {
-          throw new NotFoundException(
-            'Booking not found',
-          );
+          throw new NotFoundException('Booking not found');
         }
 
         // Do not expire confirmed or cancelled bookings
@@ -655,9 +674,7 @@ export class HotelBookingsService {
 
         // Verify that the deadline has actually passed
         if (!booking.expiresAt) {
-          throw new ConflictException(
-            'Booking has no payment deadline',
-          );
+          throw new ConflictException('Booking has no payment deadline');
         }
 
         if (booking.expiresAt.getTime() > now.getTime()) {
@@ -695,6 +712,29 @@ export class HotelBookingsService {
   }
 
   // ==========================================
+  // HTL-23: COMPLETE CONFIRMED BOOKINGS AFTER CHECK-OUT
+  // Called by HotelBookingsScheduler
+  // ==========================================
+
+  async completeDeparted() {
+    const result = await this.bookingModel.updateMany(
+      {
+        status: BookingStatus.Confirmed,
+        checkOut: { $lt: new Date() },
+      },
+      {
+        $set: { status: BookingStatus.Completed },
+      },
+    );
+
+    if (result.modifiedCount) {
+      this.logger.log(`Completed ${result.modifiedCount} hotel booking(s)`);
+    }
+
+    return result;
+  }
+
+  // ==========================================
   // HELPER: CALCULATE REFUND PERCENTAGE
   // ==========================================
 
@@ -702,35 +742,28 @@ export class HotelBookingsService {
     booking: HotelBookingDocument,
     cancellationDate: Date,
   ): number {
-    const millisecondsPerDay =
-      24 * 60 * 60 * 1000;
+    const millisecondsPerDay = 24 * 60 * 60 * 1000;
 
     // Calculate complete days before check-in
     const daysBeforeCheckIn = Math.floor(
-      (
-        booking.checkIn.getTime() -
-        cancellationDate.getTime()
-      ) / millisecondsPerDay,
+      (booking.checkIn.getTime() - cancellationDate.getTime()) /
+        millisecondsPerDay,
     );
 
     // Use original policies stored in booking
-    const tiers =
-      booking.policies?.cancellationTiers ?? [];
+    const tiers = booking.policies?.cancellationTiers ?? [];
 
     // Sort cancellation tiers from highest to lowest
     const sortedTiers = [...tiers].sort(
-      (a, b) =>
-        b.daysBeforeCheckIn - a.daysBeforeCheckIn,
+      (a, b) => b.daysBeforeCheckIn - a.daysBeforeCheckIn,
     );
 
     // Find the applicable cancellation tier
     const applicableTier = sortedTiers.find(
-      (tier) =>
-        daysBeforeCheckIn >= tier.daysBeforeCheckIn,
+      (tier) => daysBeforeCheckIn >= tier.daysBeforeCheckIn,
     );
 
-    const refundPercent =
-      applicableTier?.refundPercent ?? 0;
+    const refundPercent = applicableTier?.refundPercent ?? 0;
 
     // Protect against invalid cancellation policy values
     if (
@@ -747,20 +780,25 @@ export class HotelBookingsService {
   }
 
   // ==========================================
+  // HELPER: DETECT MONGODB DUPLICATE KEY ERROR
+  // ==========================================
+
+  private isDuplicateKeyError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 11000
+    );
+  }
+
+  // ==========================================
   // HELPER: VALIDATE MONGODB ID
   // ==========================================
 
-  private validateId(
-    id: string,
-    entity: string,
-  ): string {
-    if (
-      typeof id !== 'string' ||
-      !/^[a-fA-F0-9]{24}$/.test(id)
-    ) {
-      throw new BadRequestException(
-        `Invalid ${entity} ID`,
-      );
+  private validateId(id: string, entity: string): string {
+    if (typeof id !== 'string' || !/^[a-fA-F0-9]{24}$/.test(id)) {
+      throw new BadRequestException(`Invalid ${entity} ID`);
     }
 
     // Mongoose automatically casts valid ID strings
@@ -772,26 +810,17 @@ export class HotelBookingsService {
   // ==========================================
 
   private parseDate(value: string): Date {
-    if (
-      typeof value !== 'string' ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(value)
-    ) {
-      throw new BadRequestException(
-        'Dates must use YYYY-MM-DD format',
-      );
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new BadRequestException('Dates must use YYYY-MM-DD format');
     }
 
-    const date = new Date(
-      `${value}T00:00:00.000Z`,
-    );
+    const date = new Date(`${value}T00:00:00.000Z`);
 
     if (
       Number.isNaN(date.getTime()) ||
       date.toISOString().slice(0, 10) !== value
     ) {
-      throw new BadRequestException(
-        'Invalid booking date',
-      );
+      throw new BadRequestException('Invalid booking date');
     }
 
     return date;

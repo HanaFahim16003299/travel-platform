@@ -8,17 +8,18 @@ import {
 
 import { HotelsModule } from '../hotels/hotels.module.js';
 
-import {
-  HotelBookingsController,
-} from './hotel-bookings.controller.js';
+import { HotelBookingsController } from './hotel-bookings.controller.js';
 
-import {
-  HotelBookingsService,
-} from './hotel-bookings.service.js';
+import { HotelBookingsService } from './hotel-bookings.service.js';
+import { HotelBookingsScheduler } from './hotel-bookings.scheduler.js';
+
+import { HotelReservationsController } from './reservations/hotel-reservations.controller.js';
+import { HotelReservationsService } from './reservations/hotel-reservations.service.js';
 
 @Module({
   imports: [
     HotelsModule,
+    // NotificationsModule is @Global, so no import is needed for it.
 
     MongooseModule.forFeature([
       {
@@ -28,13 +29,14 @@ import {
     ]),
   ],
 
-  controllers: [HotelBookingsController],
+  controllers: [HotelBookingsController, HotelReservationsController],
 
-  providers: [HotelBookingsService],
-
-  exports: [
+  providers: [
     HotelBookingsService,
-    MongooseModule,
+    HotelBookingsScheduler,
+    HotelReservationsService,
   ],
+
+  exports: [HotelBookingsService, MongooseModule],
 })
 export class HotelBookingsModule {}
