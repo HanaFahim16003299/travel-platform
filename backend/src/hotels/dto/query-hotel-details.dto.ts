@@ -1,12 +1,12 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsDate, IsOptional } from 'class-validator';
-import { TenPerPageQueryDto } from './ten-per-page-query.dto.js';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 
 // Created by Mohamed Hesham: HTL-02. Both dates are optional; when they are sent
 // together, the hotel details also list the rooms free for those dates
-// (page / limit, max 10, apply to that room list).
-export class QueryHotelDetailsDto extends TenPerPageQueryDto {
+// (page / limit apply to that room list).
+export class QueryHotelDetailsDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     example: '2026-12-01',
     description: 'Check-in day. Send it together with endDate.',
