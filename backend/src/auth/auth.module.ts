@@ -15,7 +15,7 @@ import { ProviderScopeGuard } from './guards/provider-scope.guard.js';
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     JwtModule.register({
       secret: process.env.JWT_SECRET,
-      signOptions: { expiresIn: Number(process.env.JWT_EXPIRES_MINUTES ?? 60) * 60 },
+      signOptions: { expiresIn: Number(process.env.JWT_EXPIRES_MINUTES ?? 30) * 60 },
     }),
   ],
   controllers: [AuthController],

@@ -7,15 +7,15 @@ import { User, UserDocument } from '../users/schemas/user.schema.js';
 import { AccountStatus, ProviderType, Role } from '../common/enums/index.js';
 import { CreateModeratorDto, ListAccountsQuery } from './dto/admin.dto.js';
 // Hana's shared services - ADJUST import paths / method names to what she actually pushed:
-import { AuditLogService } from './temp-shared-services.js';
-import { NotificationService } from './temp-shared-services.js';
+import { AuditLogService } from '../audit-logs/audit-log.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 @Injectable()
 export class AdminAccountsService {
   constructor(
     @InjectModel(User.name) private users: Model<UserDocument>,
     private audit: AuditLogService,
-    private notifications: NotificationService,
+    private notifications: NotificationsService,
   ) {}
 
   private clean(u: any) {
@@ -36,8 +36,8 @@ export class AdminAccountsService {
       role: dto.providerType === ProviderType.Airline ? Role.AirlineModerator : Role.HotelModerator,
       assignedProvider: { type: dto.providerType, providerId: dto.providerId },
     });
-    await this.audit.log({ actorId: adminId, action: 'MODERATOR_CREATED', targetType: 'user', targetId: String(user._id),
-      details: { providerType: dto.providerType, providerId: dto.providerId } });
+    await this.audit.log({ actorId: adminId, actorRole: 'admin', action: 'MODERATOR_CREATED', targetType: 'user', targetId: String(user._id),
+      metadata: { providerType: dto.providerType, providerId: dto.providerId } });
     return this.clean(user);
   }
 
@@ -71,8 +71,8 @@ export class AdminAccountsService {
     u.status = AccountStatus.Suspended;
     u.tokenVersion += 1; // kicks out active sessions immediately
     await u.save();
-    await this.audit.log({ actorId: adminId, action: 'ACCOUNT_SUSPENDED', targetType: 'user', targetId: id, details: { reason } });
-    await this.notifications.create({ userId: id, type: 'ACCOUNT_SUSPENDED', message: 'Your account has been suspended by an administrator.' });
+    await this.audit.log({ actorId: adminId, actorRole: 'admin', action: 'ACCOUNT_SUSPENDED', targetType: 'user', targetId: id, metadata: { reason } });
+    await this.notifications.create({ userId: id, type: 'ACCOUNT_SUSPENDED', title: 'Account suspended', message: 'Your account has been suspended by an administrator.' });
     return this.clean(u);
   }
 
@@ -81,8 +81,8 @@ export class AdminAccountsService {
     if (u.status === AccountStatus.Active) throw new ConflictException('Account is already active');
     u.status = AccountStatus.Active; u.lockUntil = undefined; u.failedLoginAttempts = 0;
     await u.save();
-    await this.audit.log({ actorId: adminId, action: 'ACCOUNT_REACTIVATED', targetType: 'user', targetId: id });
-    await this.notifications.create({ userId: id, type: 'ACCOUNT_REACTIVATED', message: 'Your account has been reactivated.' });
+    await this.audit.log({ actorId: adminId, actorRole: 'admin', action: 'ACCOUNT_REACTIVATED', targetType: 'user', targetId: id });
+    await this.notifications.create({ userId: id, type: 'ACCOUNT_REACTIVATED', title: 'Account reactivated', message: 'Your account has been reactivated.' });
     return this.clean(u);
   }
 
@@ -94,8 +94,8 @@ export class AdminAccountsService {
     u.passwordHash = await bcrypt.hash(temp, 12);
     u.mustChangePassword = true; u.tokenVersion += 1; u.lockUntil = undefined; u.failedLoginAttempts = 0;
     await u.save();
-    await this.audit.log({ actorId: adminId, action: 'PASSWORD_RESET_BY_ADMIN', targetType: 'user', targetId: id });
-    await this.notifications.create({ userId: id, type: 'PASSWORD_RESET', message: 'An administrator reset your password. Please change it after logging in.' });
+    await this.audit.log({ actorId: adminId, actorRole: 'admin', action: 'PASSWORD_RESET_BY_ADMIN', targetType: 'user', targetId: id });
+    await this.notifications.create({ userId: id, type: 'PASSWORD_RESET', title: 'Password reset', message: 'An administrator reset your password. Please change it after logging in.' });
     return { temporaryPassword: temp, note: 'Shown once. Share it securely; the user must change it at next login.' };
   }
 }
