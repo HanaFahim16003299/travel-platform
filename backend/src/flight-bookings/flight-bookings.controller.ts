@@ -19,7 +19,6 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { Types } from 'mongoose';
 import { Auth, CurrentUser } from '../auth/decorators.js';
 import type { AuthUser } from '../auth/decorators.js';
 import { Role } from '../common/enums/index.js';
@@ -135,23 +134,5 @@ export class FlightBookingsController {
   @ApiConflictResponse({ description: 'Not confirmed, or already departed' })
   cancel(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.service.cancel(user, id);
-  }
-
-  /**
-   * TEMPORARY, for testing until Youssef's Stripe webhook exists.
-   * Simulates a successful payment. DELETE before the final submission.
-   */
-  @Post(':id/dev-confirm')
-  @HttpCode(200)
-  @Auth(Role.Admin)
-  @ApiOperation({
-    summary:
-      'DEV ONLY: simulate a successful payment (remove when payments are ready)',
-  })
-  devConfirm(@Param('id') id: string) {
-    return this.service.confirmAfterPayment(
-      id,
-      `dev_${new Types.ObjectId().toString()}`,
-    );
   }
 }
