@@ -403,6 +403,52 @@ payments routes appeared in Swagger. I set up Stripe test keys and the Stripe
 CLI webhook locally and followed the step-by-step Swagger test. I did not
 commit any keys.
 
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-11, HTL-01, GEN-08
+Prompt:
+Asked Claude to let the hotel search take a city or country name (or a country
+code) or a cityId, to reject creating or updating a hotel with a city that is not
+in the seeded reference data, and to add hotel photos (upload and delete) under
+the shared media rule: JPG or PNG, 5 MB, at most 5 photos per hotel.
+How the output was used:
+Reviewed the code and the tests before committing. tsc, the build and the unit
+tests passed. The work reached develop through pull request #20. Later, in
+Swagger, I created a Cairo hotel with a seeded city id as admin, uploaded a PNG
+photo and searched with destination=Cairo: the hotel came back with its price
+and free room. I did not try every photo case by hand (WebP, over 5 MB, the 6th
+photo); those rules are covered by unit tests only. Room creation returned 403
+for the admin, as expected, because only the hotel's own moderator may add rooms.
+
+Date: 2026-11-27
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: GEN-05
+Prompt:
+Asked Claude what the official requirements say about page size, then to make
+the hotel lists use exactly 10 items per page, and afterwards to allow a limit
+of up to 100 with 10 as the default.
+How the output was used:
+Read GEN-05 in the requirements sheet. First the page size was fixed at 10, then
+I decided to use the shared pagination DTO (default 10, maximum 100) for hotel
+search, free rooms, availability, hotel details and hotel reservations, and the
+extra TenPerPageQueryDto and its spec were removed. tsc and all 276 unit tests
+pass on my machine, and the Swagger search response shows limit 10 by default.
+
+Date: 2026-11-27
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file, shell and test tools
+Related Requirement: develop build check
+Prompt:
+Asked Claude to continue the testing work and to check that develop builds and
+that the unit tests pass.
+How the output was used:
+Claude found that admin.module.ts on develop still had leftover merge text, so
+tsc reported 13 errors. I applied the fix from the existing fix branch, then
+dropped my copy when the same fix was merged into develop (pull request #24) and
+rebased my branch onto the new develop. After the rebase tsc was clean and all
+tests passed.
 
 
 feature/ACC-01-auth-and-guards
