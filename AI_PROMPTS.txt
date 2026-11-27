@@ -1,0 +1,507 @@
+feature/BLG-01-create-post
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-01, BLG-02, BLG-03, BLG-04, BLG-08, BLG-09
+Prompt:
+Asked Copilot to read the existing modules, then to implement Phase 1 of the
+blog module (post schema, DTOs, service, controller) using the workbook rules.
+How the output was used:
+Reviewed the generated post CRUD and used it as the base for the blog module.
+
+
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-05, BLG-06, BLG-07
+Prompt:
+Asked Copilot to implement Phase 2 of the blog module: comments (create, list,
+edit, delete with author-only rules) and likes (one like per user per post,
+unique compound index, 409 on duplicates, atomic counters).
+How the output was used:
+Reviewed the generated code and used it as the base for comments and likes.
+
+
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-08, BLG-12
+Prompt:
+Asked Copilot to implement Phase 3 of the blog module: GET /api/tags/:tag/posts
+and the public GET /api/authors/:id page, exposing only safe author fields.
+How the output was used:
+Reviewed the generated code and checked that no private user fields are
+returned. Public itineraries on the author page are left for when the
+itineraries module is merged.
+
+Date: 2026-11-22
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: GEN-07, GEN-09, GEN-10
+Prompt:
+Asked Copilot to implement Phase 4 of the blog module: content reports for
+posts and comments, admin report review (dismiss, hide, delete), direct content
+deletion, and audit and notification calls.
+How the output was used:
+Reviewed the generated code and used it as the base for moderation.
+
+
+
+Date: 2026-11-23
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-01 to BLG-12, GEN-07, GEN-09, GEN-10
+Prompt:
+Asked Copilot to review the blog code against the workbook (review only), then
+to fix two GEN-10 items: default open reports for the admin list and
+author/admin access to their own hidden or draft posts and comments.
+How the output was used:
+Used the review table to separate real gaps from items waiting on teammates'
+modules. Reviewed and tested the generated fixes.
+
+
+
+Date: 2026-11-23
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: GEN-07
+Prompt:
+Asked Copilot to route audit and notification calls through one adapter file,
+first against temporary stubs and then against the merged shared services.
+How the output was used:
+Only blog-integrations.ts and blog.module.ts changed when the real services
+were merged.
+
+
+
+Date: 2026-11-23
+Student: Mohamed Elhamy
+Tool: GitHub Copilot
+Related Requirement: BLG-10, GEN-08
+Prompt:
+Asked Copilot to implement post images using the shared upload code: author-only
+upload and delete, JPG/PNG only, 5 MB, maximum 5 images per post, and cleanup of
+files that fail validation or belong to deleted posts.
+How the output was used:
+Reviewed the generated code and tested uploads, rejections and deletion in
+Swagger.
+
+//mohamed hesham prompts:
+Task: remove the `currency` field from the Hotel module in backend/src/hotels/.
+
+Why: requirement PAY-04 says the platform uses a single currency for all prices, so hotels must not carry their own currency.
+
+Do exactly this and nothing else:
+1. Search backend/src for every use of "currency" and list the hits first. Only change hits that belong to the Hotel module (schema, DTOs, service, controller, Swagger decorators, seed data, tests). Do not touch other modules' currency fields (for example the user's preferred currency).
+2. Remove `currency` from hotel.schema.ts, create-hotel.dto.ts and hotels.service.ts (anywhere it is set, read or validated).
+3. In update-hotel.dto.ts, if it only used OmitType to exclude `currency`, change it to PartialType(CreateHotelDto) and remove the unused OmitType import. Keep the existing PartialType import source.
+4. Do not edit package.json, tsconfig.json, .env or any file outside the Hotel module. Do not commit.
+5. Run `npx tsc --noEmit` from backend/ and fix only errors caused by this change.
+6. Finish by showing me the list of files changed and the tsc result.
+
+Follow the existing code style. No new abstractions, no refactoring, no comments about the change.
+
+ /superpowers:writing-skills Task: align room deactivate/delete with requirement HTL-06 in backend/src/hotels/ (rooms module). Do exactly this and nothing else.
+
+1. update-room.dto.ts: add optional `isActive` (boolean, @IsOptional @IsBoolean, with the same Swagger decorator style as the other fields).
+2. rooms.service.ts, updateRoom: when dto.isActive === false and the room is currently active, throw ConflictException (409) if any RoomAvailability document exists for that room with date >= today at UTC midnight and bookingId not null. Setting isActive to true is always allowed. Reuse the existing "today at UTC midnight" logic from the current delete method instead of writing a new one.
+3. rooms.service.ts, delete method: change from soft delete to hard delete. Throw ConflictException (409) if ANY RoomAvailability document for that room (any date) has bookingId not null, with a message telling the moderator to deactivate the room instead. Otherwise delete all RoomAvailability documents of that room, then delete the room. Keep the existing hotel/room ownership checks and the 404 behaviour.
+4. room.schema.ts: replace the partial unique index on { hotelId, name } with a plain unique index on { hotelId, name } (no partialFilterExpression). Keep the existing duplicate-name 409 handling working. Remove any now-unused code.
+5. Do not edit package.json, tsconfig.json, .env or files outside the hotels module. Do not commit. Do not touch the database.
+6. Run `npx tsc --noEmit` from backend/ and show me the changed files and the result.
+
+Follow the existing code style. No new abstractions.
+
+Task: in backend/src/hotels/availability/availability.service.spec.ts ONLY (no source changes, no commit), add filter assertions to the update() tests:
+- In the test "throws 409 and writes nothing when any night is already booked": assert availabilityModel.exists was called with an object containing exactly the same range filter as countDocuments received (roomId, date: { $in: nights }) plus bookingId: { $ne: null } (use toHaveBeenCalledWith with the exact object, building the nights with the same helper the file already uses).
+- In one BLOCK test, assert the booked-night check exists call has bookingId: { $ne: null } as well, so both code paths are covered.
+Verify: npm test, npx tsc --noEmit, npx prettier --check "src/hotels/**/*.ts". Mutation-check in a scratch COPY only: change `bookingId: { $ne: null }` to `{ $eq: null }` in availability.service.ts line ~109; at least one test must fail. Report the test that caught it and git status.
+
+Task: strengthen 2 weak spots in the hotels specs. Touch ONLY these spec files: backend/src/hotels/utils/date-range.util.spec.ts and backend/src/hotels/rooms/rooms.service.spec.ts. No source changes, no commit.
+
+1. date-range.util.spec.ts: the 366-night tests build their dates from the exported MAX_RANGE_NIGHTS constant, so changing the constant keeps them green. Hardcode the literals: a 366-night range must be accepted (length 366) and a 367-night range must throw BadRequestException. Keep one extra small test asserting MAX_RANGE_NIGHTS === 366.
+
+2. rooms.service.spec.ts: availabilityModel.exists is only mocked for its return value. Add assertions on the filter it receives:
+   - deleteRoom (HTL-06): availabilityModel.exists is called with roomId = the room's _id and bookingId: { $ne: null }, and with NO date condition (past bookings must also block deletion).
+   - updateRoom deactivation (HTL-05/15): availabilityModel.exists is called with roomId, bookingId: { $ne: null } and date: { $gte: <today at UTC midnight> }. Use vi.useFakeTimers()/vi.setSystemTime for a deterministic "today".
+   Use expect(...).toHaveBeenCalledWith(...) with the exact filter objects.
+
+Verify (run, do not assume): npm test (show counts), npx tsc --noEmit, npx prettier --check "src/hotels/**/*.ts". Then mutation-check in a scratch COPY only: (a) change MAX_RANGE_NIGHTS to 367, (b) change `bookingId: { $ne: null }` to `{ $exists: false }` in both rooms.service.ts places, (c) remove the `date: { $gte: today }` condition. Each must make at least one test fail. Report which tests caught each, and confirm git status shows only the 2 spec files changed relative to before.
+
+Task: write automated unit tests (Vitest) for the hotels module. Work only in backend/src/hotels/ (new *.spec.ts files next to the code they test). Do NOT change any non-test source file; if a test exposes a real bug, DO NOT fix it: write the test so it documents the correct expected behaviour, mark it `it.fails`/`it.todo` only if unavoidable, and report it. Do NOT commit, push or open a PR.
+
+Stack and constraints: NestJS + Mongoose, ESM (relative imports end in `.js`), Vitest (globals are on; use `vi.fn()`, NOT jest). `npm test` = `vitest run`, config includes **/*.spec.ts. Known quirk: Vitest's decorator-metadata transform cannot load anything that imports `@Auth` (controllers, via src/users/schemas/user.schema.ts and its enum-typed @Prop). So: do NOT import controllers or the auth decorators in specs, and do NOT use @nestjs/testing modules that load them. Instantiate the services directly with `new XService(mockModels...)` and mock the Mongoose models with plain objects of `vi.fn()` (chainable where the code chains .sort().lean() etc.).
+
+Write these spec files, each with clear describe/it names that state the rule being tested (include the requirement id in the describe name):
+1. utils/date-range.util.spec.ts: toUtcMidnight; getNightsBetween (end exclusive, 1 night, 400 when end <= start, 400 above 366 nights, accepts exactly 366, DST-safe: a range across 2026-03-29 and 2026-10-25 still returns one UTC-midnight Date per night); assertNotInPast (use vi.useFakeTimers()/vi.setSystemTime so tests are deterministic; today OK, yesterday -> 400).
+2. utils/free-rooms.util.spec.ts: summarizeFreeRooms with rooms of occupancy 2/3/4 (prices 80/120/200): (guests 5, rooms 1) -> null; (5,2) -> {minPrice 80, freeRooms 3}; (7,2) -> not null; (8,2) -> null; (4,1) -> not null; (1,4) -> null; empty list -> null; does not mutate the input array; minPrice is the cheapest of ALL rooms even when the cheapest room is not one of the highest-capacity rooms.
+3. rooms/rooms.service.spec.ts (HTL-03/05/06/15): createRoom (400 invalid id, 404 inactive/unknown hotel, 409 on duplicate key code 11000, rethrows other errors); updateRoom (deactivation refused with 409 when an upcoming night has a bookingId, allowed otherwise, reactivation allowed, 404 when the room is not found); deleteRoom (409 if any availability row has a bookingId, otherwise deletes availability rows then the room); findAvailableRooms (totalPrice = nights x price without float drift: 3 x 99.99 = 299.97; empty list -> data: []; 404 for inactive hotel).
+4. availability/availability.service.spec.ts (HTL-04/05/06/08/11/15): create (overlap -> 409, concurrent duplicate-key 11000 -> 409, past start -> 400, returns {created: n}, insertMany receives one doc per night with real Types.ObjectId ids); update (nights not all open -> 400, any booked night -> 409 and nothing written, BLOCK/UNBLOCK use updateMany with bookingId: null in the filter, REMOVE uses deleteMany); getHotelAvailability (BOOKED wins over BLOCKED, unopened nights omitted, pagination meta); findFreeRooms and findFreeRoomsByHotel (the aggregate pipeline matches hotelId as a real Types.ObjectId / {$in: ObjectId[]}, isBlocked false, bookingId null, date in the nights, and requires freeNights == nights.length; inactive rooms excluded; a single aggregate call for many hotels; result grouped per hotel).
+5. search/hotel-search.service.spec.ts (HTL-11/12, GEN-05): hotel that cannot cover the guests is excluded; price filter inclusive on both ends; minPrice > maxPrice -> 400; minRating excludes unrated hotels (assert the Mongo filter has reviewCount {$gt:0} and averageRating {$gte:x}); sort by price asc/desc and by rating with deterministic name/_id tie-break; pagination (page 2, limit 1) slice and meta; no hotels -> data [] and total 0 without calling the availability service.
+
+Rules for the tests: no real database or network; no shared mutable state between tests (create fresh mocks in beforeEach); no sleeping/timers; no snapshot tests; keep each file focused and readable (small helper factories for rooms/hotels are fine, but no clever abstractions).
+
+Verify before you report (run them, do not assume):
+   - from backend/: npm test (all new specs pass; show the summary line with file and test counts)
+   - npx tsc --noEmit (0 errors) and npx prettier --check "src/hotels/**/*.ts" (pass; format only files you created)
+   - mutation sanity check on 3 rules: temporarily break the source in a scratch COPY (NOT in the repo), e.g. flip `b - a` to `a - b` in free-rooms.util, remove `bookingId: null` from the update filter, and remove the 11000 handling; confirm the matching tests FAIL, then discard the copy. Report which tests caught each break.
+   - git status must show only the new *.spec.ts files (plus my existing uncommitted changes).
+
+Report: the list of spec files with test counts, the exact output of npm test, the mutation results, any bug the tests exposed, and any rule you could not test and why.
+
+Task: implement endpoint #12, GET /api/hotels/search (HTL-11, HTL-12). Work only in backend/src/hotels/. Smallest change that works; one responsibility per file; no spaghetti code. Do NOT commit, push or open a PR, and do not touch files outside backend/src/hotels/.
+
+Requirements (official sheet):
+- HTL-11: a guest or registered user searches hotels by destination, check-in date, check-out date, number of guests and number of rooms (default 1). List ACTIVE hotels that have at least that many rooms free for the WHOLE stay whose combined maximum occupancy covers the guests. Check-out must be after check-in; check-in cannot be in the past.
+- HTL-12: filter by inclusive minimum and maximum price per night (price = the CHEAPEST qualifying room) and by minimum average rating (1-5; unrated hotels are excluded when a rating filter is set); sort by that price or by rating. Show an error (400) if minPrice > maxPrice.
+- GEN-05: paginate, page size 10 (reuse the existing pagination). The route is PUBLIC (no @Auth/@ProviderScope).
+
+Already in the repo (reuse, do not duplicate):
+- utils/date-range.util.ts: getNightsBetween(start, end) (end exclusive, 400 on invalid), assertNotInPast(firstNight), toUtcMidnight.
+- utils/free-rooms.util.ts (written by me, do not change): summarizeFreeRooms(rooms: {maxAdults,maxChildren,pricePerNight}[], guests, roomCount) -> { minPrice, freeRooms } | null. It returns null when the hotel cannot host the search.
+- availability/availability.service.ts: findFreeRooms(hotelId, startDate, endDate) (written by me) = aggregation for ONE hotel: availability docs with date in the nights, isBlocked false, bookingId null, grouped by roomId, count == nights.length, then active rooms (isActive true), .lean(). Note: aggregate() does not cast, so ObjectIds must be real Types.ObjectId.
+- ../common/dto/pagination-query.dto.js (PaginationQueryDto: page=1, limit=10 max 100, sort?: string, order 'asc'|'desc') and ../common/utils/pagination.js (buildMeta(total, page, limit)).
+- Hotel schema fields: name, cityId (ObjectId), address, starRating?, averageRating, reviewCount, amenities, images, checkInTime, checkOutTime, isActive. Room schema: hotelId, name, type, beds, maxAdults, maxChildren, pricePerNight, isActive.
+
+Design:
+1. dto/search-hotels.dto.ts: QuerySearchHotelsDto extends PaginationQueryDto.
+   - cityId: required @IsMongoId (destination by city id for now; country/city-name search needs the City data that does not exist yet: leave a TODO comment).
+   - startDate, endDate: `@Type(() => Date) @IsDate()` like QueryAvailabilityDto (endDate = check-out, exclusive).
+   - guests: int >= 1 (default 1); rooms: int >= 1 (default 1) (@Type(() => Number)).
+   - minPrice, maxPrice: optional numbers >= 0; minRating: optional number 1-5.
+   - sort: redeclare the inherited `sort` so it only accepts 'price' | 'rating' (default 'price'); use the inherited `order`. Swagger enums on everything.
+2. availability/availability.service.ts: add ONE new method, e.g. findFreeRoomsByHotel(hotelIds: Types.ObjectId[], startDate, endDate): returns the free active lean rooms of MANY hotels in a single aggregation (hotelId $in), grouped per hotel (e.g. Map<string, room[]>). Do not loop one query per hotel. Share the aggregation with findFreeRooms through a small private helper so the logic exists once; findFreeRooms must keep exactly the same signature and behaviour (it is used by GET /hotels/:id/rooms/available).
+3. search/hotel-search.service.ts: HotelSearchService.search(query):
+   a. nights = getNightsBetween(...); assertNotInPast(nights[0]); reject minPrice > maxPrice with 400.
+   b. find ACTIVE hotels in cityId (.lean()); if minRating is set, require reviewCount > 0 and averageRating >= minRating.
+   c. one call to findFreeRoomsByHotel for those hotels; run summarizeFreeRooms(rooms, guests, roomCount) per hotel and drop the nulls.
+   d. apply minPrice/maxPrice (inclusive) on summary.minPrice.
+   e. sort by minPrice or averageRating (asc/desc per `order`), with a stable tie-break (name, then _id), so pagination is deterministic; then paginate (slice) and return { data, meta: buildMeta(total, page, limit) }.
+   f. each data item: { hotelId, name, address, cityId, starRating, averageRating, reviewCount, amenities, images, checkInTime, checkOutTime, minPricePerNight, freeRooms }.
+   g. no matches -> 200 with data: [] and meta total 0 (not an error).
+4. search/hotel-search.controller.ts: @Controller('hotels') with @Get('search'), public, @ApiTags('Hotels'), delegates only. IMPORTANT routing: GET /api/hotels/:id exists in HotelsController, so 'search' must NOT be captured by ':id'. Register HotelSearchController BEFORE HotelsController in the `controllers` array in hotels.module.ts (and add HotelSearchService to providers). Prove it with a test: GET /api/hotels/search must hit the search handler, and GET /api/hotels/<24-hex id> must still hit HotelsController.findOne.
+
+Verify before you report (run them, do not assume):
+   - from backend/: npx tsc --noEmit (0 errors) and npx prettier --check "src/hotels/**/*.ts" (pass).
+   - offline HTTP checks against the compiled build with mocked models/services (throwaway script OUTSIDE src/, deleted afterwards): valid search -> 200 and response shape; missing cityId/startDate/endDate -> 400; invalid cityId -> 400; minPrice > maxPrice -> 400; minRating 6 -> 400; sort=foo -> 400; unknown param -> 400; no cookie -> still 200; route ordering as described above.
+   - service-level checks with mocked models: a hotel whose free rooms cannot cover the guests is excluded; price filter is inclusive on both ends; unrated hotel excluded when minRating is set; sort by price asc/desc and by rating; pagination (page 2, limit 1) gives the right slice and meta; findFreeRooms still returns the same result as before.
+   - confirm the free-room aggregation filters on real Types.ObjectId values for hotelId.
+
+Report: files changed (short diff summary), the exact output of every check, and anything you decided that is not written above. Leave no scratch files; git status must show only intended files (my existing uncommitted changes in other files are expected).
+ develop
+
+feat/hotels-gaps-htl-02-06-08 and feat/GEN-12-reference-data-seeding (Mohamed Hesham, section 8.5 hotels)
+
+Date: 2026-11-25
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-22
+Prompt:
+Asked Claude to explain the HTL-22 requirement and then help build the
+moderator reservations list (GET /hotels/:hotelId/reservations) as separate
+files in hotel-bookings/reservations/, without changing the booking logic.
+How the output was used:
+Reviewed the controller, service and spec. Decided that expired reservations
+are hidden by default and that only a fixed list of fields is returned.
+Tested the endpoint in Swagger with a moderator and with another hotel's
+moderator (403), and checked the filter values (400 on a bad status).
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude Code (Anthropic)
+Related Requirement: HTL-16, HTL-17, HTL-18, HTL-23
+Prompt:
+Gave Claude Code a task to complete the missing hotel-booking parts: store
+ids as ObjectIds, hold rooms for 10 minutes, booking reference, confirmation
+notification, adults and children per room, and the Completed status with a
+scheduler. This was merged in PR #15.
+How the output was used:
+Reviewed it afterwards and decided it was too much code to explain. Later
+pull request #16 restored the earlier versions of those booking files and
+kept only the booking reference (next entry). The remaining items are left to
+the hotel-booking owner and the payments work.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-17
+Prompt:
+Asked Claude to redo only the booking reference, as small as possible, and to
+explain the reason for every edit first: a 6-character code without
+confusing characters (no 0, O, 1, I), created when a booking is confirmed,
+with a unique sparse index as the real guard against duplicates.
+How the output was used:
+Reviewed each edit before it was applied (schema field, generator method in
+the hotel booking service, one line in confirmBooking). Checked with unit
+tests that the code is unique, retried up to 5 times, and kept when a booking
+is confirmed again. It cannot be tried end to end until payments call
+confirmBooking.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-08
+Prompt:
+Asked Claude how the room status view can show the reservation reference for
+booked nights, using the booking reference above.
+How the output was used:
+Reviewed the change in availability.service.ts: one extra query for all
+booked nights of the page (no query per night). Added three unit tests and
+checked them by temporarily breaking the code to see the tests fail.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: GEN-05
+Prompt:
+Asked Claude for the GEN-05 requirement before implementing anything, then
+asked it to paginate GET /hotels/:hotelId/rooms/available.
+How the output was used:
+Decided to keep the page size and limit at 10, because the requirement sheet
+says page size 10 and does not mention 100. A small shared query class
+(ten-per-page-query.dto.ts) is used by the hotel search, the availability
+view, the free rooms list and the hotel details. Added tests for the limit.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-02
+Prompt:
+Asked Claude to show the HTL-02 requirement first, then to add the available
+rooms to GET /hotels/:id when check-in and check-out dates are sent.
+How the output was used:
+Reviewed the change. Decided to leave reviews out of the hotel details,
+because GET /hotels/:id/reviews already exists. Sending only one of the two
+dates returns 400. The hotel details reuse the existing available-rooms
+service. Added four unit tests.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-06
+Prompt:
+Asked Claude to close the room deletion edge case: a room that was ever
+reserved must not be deleted, even if its booking was cancelled or expired.
+How the output was used:
+Reviewed the change in rooms.service.ts: deletion is refused when the room is
+booked on any night or when any hotel booking ever contained the room (both
+checks run together). Added a test for a released booking.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: GEN-12
+Prompt:
+Asked Claude to check the official reference datasets and the merged
+reference-data code, and to add the missing wiring so the data is seeded when
+the application starts, with tests for the CSV parser, the validation, the
+fixed ids and the seeder.
+How the output was used:
+Checked the CSV files against the official sheet (identical). Registered the
+four schemas and the seeder in the module and added 22 unit tests. Confirmed
+in the running application that the log shows 8 countries, 8 cities, 8
+airports and 8 attractions. All 126 tests and the TypeScript build pass.
+
+================================================
+Date: 2026-11-25
+Student: Yusuf Shehabeldin Ali
+Tool: Gemini (Antigravity)
+Related Requirement: PAY-01, PAY-02, PAY-03, ACC-17
+Prompt:
+Step-by-step guidance to implement Stripe test-mode payments, webhook verification, policy display/acceptance, refund integration with flight and hotel bookings, admin bookings listing, and Vitest unit tests.
+How the output was used:
+Implemented Payment and Refund schemas, BookingPoliciesController, PaymentsController, RefundsController, AdminBookingsController, booking service integrations, and unit tests.
+================================================
+
+
+
+Date: 2026-11-27
+Student: Joumana Hozayen
+Tool: Claude
+Related Requirement: FLT-06, FLT-08, FLT-09, FLT-12, FLT-19, FLT-21, FLT-22, FLT-23, FLT-25, FLT-26, FLT-29, FLT-30, PAY-01, PAY-02, PAY-03, ACC-11, ACC-12, GEN-05
+Prompt:
+Gave Claude the code review of the flight booking module (items A1 to D3) and
+asked it to fix every item on a branch from develop (e1a206e), with the smallest
+change per item, one commit per fix, a unit test for each fix, a deliberate
+break of each fix to check that a test fails, and no payment code until the
+payments module is merged.
+How the output was used:
+Claude made 20 commits: pdfkit dependency, service split (D1), cleanups (D3),
+airline bag price/limit and refund tiers (A1), idempotent payment confirmation
+(A2), seat-release retry queue (A5), flight cancellation hook (A3), moderator
+booking list and CSV (A4), deactivation check (B1), policy acceptance (B2),
+refund status (B3), strict date of birth (C1), per-leg passenger checks and
+duplicate passports (C2), reduced views for admins/moderators (C3), draft and
+hold limits with a price re-check (C4), hold-minutes validation (C5), page size
+10 (C6), Departed flight status (C7), typed Airport model (D2) and extra tests
+(A7). When the payments module was merged into develop, Claude merged develop
+into the branch, moved the payments calls into the new structure, connected the
+refund status to the real Stripe refunds, removed dev-confirm (A6), and fixed
+admin.module.ts, which develop had left with conflict markers. tsc, the full
+Vitest suite, nest build and prettier --check on the touched files passed in
+Claude's environment, and each fix was broken on purpose to see a test fail.
+I reviewed the commits before applying them.
+
+
+Date: 2026-11-26
+Student: Hana Fahim
+Tool: Claude (Anthropic), chat with file, shell and test tools
+Related Requirement: GEN-12, GEN-05, GEN-08
+Prompt:
+Asked Claude to review my draft of the shared reference-data work and complete
+it: public read endpoints for countries, currencies, cities, airports (list and
+by id) and attractions, with search, filters, sorting and page size 10, plus a
+shared service other modules can call (airportsExist, cityExists,
+countryExists, isSupportedCurrency). Also asked it to restrict uploaded images
+to JPG and PNG at 5 MB (GEN-08) and to document the API conventions in
+docs/api/conventions.md.
+How the output was used:
+Reviewed the code and ran it against my own database. The startup log showed
+the new routes and "Reference data ready: 8 countries, 8 cities, 8 airports,
+8 attractions". Removed WebP from the allowed image types and updated the blog
+upload filter message. Checked that tsc and the full Vitest suite passed
+before opening the pull request myself.
+
+Date: 2026-11-26
+Student: Hana Fahim
+Tool: Claude (Anthropic), chat with file, shell and test tools
+Related Requirement: ACC-18, ACC-06, GEN-06, GEN-07
+Prompt:
+Asked Claude to add the missing shared pieces of my part: an admin account that
+is created at startup from ADMIN_EMAIL and ADMIN_PASSWORD (never overwriting an
+existing user, skipping weak passwords), a paginated and filterable
+GET /api/admin/audit-logs for admins, and the notification endpoints (list with
+unread filter and unread count, mark one as read, mark all as read) for the
+signed-in user. Also asked it to change the session setting in .env.example to
+JWT_EXPIRES_MINUTES=30.
+How the output was used:
+Reviewed the generated services, controllers and DTOs and kept the existing
+error format and pagination shape. Added unit tests for the admin seed, with
+the user schema mocked. Started the application, saw "Admin account created"
+in the log, logged in as the admin in Swagger and called the audit-log and
+notification endpoints. No secrets were written to Git; the admin password
+stays only in my local .env.
+
+Date: 2026-11-27
+Student: Hana Fahim
+Tool: Claude (Anthropic), chat with file, shell and test tools
+Related Requirement: ACC-17, ACC-18, PAY-01, GEN-12
+Prompt:
+Asked Claude to check the merged develop branch after the payments, flight
+booking and hotel pull requests, to find anything that stopped the build, and
+to explain how to run the whole flow (admin creates a hotel and a moderator,
+moderator adds a room, user books, pays with a Stripe test card, and the refund).
+How the output was used:
+Claude found that admin.module.ts on develop still contained conflict text
+twice, so the application could not compile, and that pdfkit was missing from
+package.json. I merged the fixes through pull requests (pdfkit, then the second
+admin.module.ts fix), pulled develop, and restarted the backend until the
+payments routes appeared in Swagger. I set up Stripe test keys and the Stripe
+CLI webhook locally and followed the step-by-step Swagger test. I did not
+commit any keys.
+
+
+
+feature/ACC-01-auth-and-guards
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-01, ACC-04, ACC-05, ACC-06, ACC-08
+Prompt:
+Asked Claude to help implement my part (auth, users and account administration) from the team division and project description: registration, login with failed-login lockout, logout and change password using httpOnly cookie tokens.
+How the output was used:
+Reviewed the generated NestJS auth module (user schema, DTOs, auth service and controller) and used it as the base. I checked the password rules, lockout limits and session length against the requirements sheet and adjusted them.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-04, ACC-19
+Prompt:
+Asked Claude to implement the role and ownership guards that the other team members need: a login guard, a roles decorator, a provider-scope guard for moderators and an ownership helper for services.
+How the output was used:
+Used the JwtAuthGuard, RolesGuard, ProviderScopeGuard and assertOwner() helper, then shared the usage (@Auth, @ProviderScope, @CurrentUser) with the team. The guard loads the user on every request so suspension and logout take effect immediately.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-09, ACC-11, ACC-12
+Prompt:
+Asked Claude to implement the profile endpoints: view my profile, update it (without allowing email or role changes) and deactivate my account with password confirmation.
+How the output was used:
+Used the generated users controller and DTOs. I tested in Swagger that sending a role in the update body is rejected with 400.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-07a, ACC-13, ACC-14, ACC-15, ACC-16
+Prompt:
+Asked Claude to implement the admin account endpoints: create moderator accounts assigned to one provider, list accounts with filters and pagination, suspend and reactivate accounts, and admin-assisted password reset.
+How the output was used:
+Used the generated admin accounts service and controller. Suspension and password reset invalidate active sessions. I wired in audit logging and notifications after the shared services were merged.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: General (project setup)
+Prompt:
+Asked Claude to help me set up the project locally (clone, install packages, .env, Swagger testing) and to fix compile errors: ESM import paths (.js extensions), type-only imports for decorators, enum naming to match the shared Role enum, and the JWT expiry type.
+How the output was used:
+Applied the fixes step by step and checked with npx tsc --noEmit until the build was clean. I did not share any credentials, tokens or the MongoDB connection string with the tool.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: General (merge conflicts)
+Prompt:
+Showed Claude a TypeScript error from admin.module.ts that contained leftover merge-conflict markers, and asked how to resolve it.
+How the output was used:
+Claude explained that both sides were real work (the admin bookings endpoint and the admin seed). I combined both into one module file and told the team.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-15
+Prompt:
+Gave Claude the real audit-log, notification, airline and hotel schema code and asked for provider deactivate/reactivate that hides a provider from search while keeping existing confirmed bookings valid, with audit logging and notifications to the moderator.
+How the output was used:
+Used the generated AdminProvidersService and controller (PATCH /admin/providers/:type/:id/deactivate and /reactivate). It toggles isActive, logs the action and notifies the assigned moderator. I tested it in Swagger.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: FLT-01
+Prompt:
+Asked Claude to add a public GET /api/airlines list (active airlines only, searchable and paginated) so moderators and users can pick an airline.
+How the output was used:
+Used the generated list endpoint and added an admin variant that includes inactive airlines.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-06, GEN-07
+Prompt:
+Asked Claude to replace my temporary fake audit and notification services with the team's real AuditLogService and NotificationsService, and to change the default session length from 60 to 30 minutes.
+How the output was used:
+Updated the imports and call fields (actorRole, metadata, title) to match the real services, deleted temp-shared-services.ts and changed the session default to 30 in auth.module.ts and auth.controller.ts.
+================================================
