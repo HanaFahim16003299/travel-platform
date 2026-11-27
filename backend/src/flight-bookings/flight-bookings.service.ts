@@ -37,6 +37,7 @@ import {
 import { calculatePrice } from './domain/pricing.js';
 import { computeRefund } from './domain/refund-rules.js';
 import { generateBookingReference } from './domain/booking-reference.js';
+import { toRestrictedBookingView } from './domain/booking-views.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -443,6 +444,16 @@ export class FlightBookingsService implements OnModuleInit {
     if (!isOwner && !isAdmin && !isAirlineMod)
       throw new ForbiddenException('You do not have access to this booking');
     return b;
+  }
+
+  /**
+   * GET /flight-bookings/:id. The owner sees everything; an admin or the airline's
+   * moderator gets a reduced view without passport numbers, dates of birth, emails or
+   * phones (review C3, Joumana Hozayen).
+   */
+  async viewFor(user: AuthUser, id: string) {
+    const b = await this.findOneFor(user, id);
+    return String(b.userId) === user.id ? b : toRestrictedBookingView(b);
   }
 
   /** For Habiba (ACC-12): block account deactivation while upcoming bookings exist. */

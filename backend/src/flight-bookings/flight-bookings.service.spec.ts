@@ -453,4 +453,113 @@ describe('FlightBookingsService', () => {
       );
     });
   });
+
+  describe('booking details and access (ACC-11, review C3)', () => {
+    const admin = {
+      id: new Types.ObjectId().toString(),
+      email: 'a@test.com',
+      role: 'admin',
+    } as never;
+    const moderatorOf = (airlineId: Types.ObjectId) =>
+      ({
+        id: new Types.ObjectId().toString(),
+        email: 'm@test.com',
+        role: 'airline_moderator',
+        assignedProvider: { type: 'airline', providerId: String(airlineId) },
+      }) as never;
+    const withPersonalData = () => {
+      const b = bookingDoc();
+      Object.assign(b.passengers[0], {
+        documentNumber: 'PASSPORT-X9',
+        email: 'sara@test.com',
+        phone: '+20-PHONE',
+        ticketNumber: 'ABC234-01',
+      });
+      Object.assign(b.segments[0], {
+        flightNumber: 'TA100',
+        cabinClass: 'economy',
+        arrivalAt: new Date(),
+      });
+      return b;
+    };
+
+    it('gives the owner the full booking', async () => {
+      const b = withPersonalData();
+      h.bookingModel.findById.mockResolvedValue(b);
+      expect(await h.service.viewFor(owner, b._id.toString())).toBe(b);
+    });
+
+    it('gives an admin a reduced view without passport, birth date, email or phone', async () => {
+      const b = withPersonalData();
+      h.bookingModel.findById.mockResolvedValue(b);
+
+      const view = await h.service.viewFor(admin, b._id.toString());
+
+      expect(view).toMatchObject({
+        bookingReference: 'ABC234',
+        status: FlightBookingStatus.CONFIRMED,
+      });
+      expect((view as { passengers: unknown[] }).passengers).toEqual([
+        {
+          firstName: 'Sara',
+          lastName: 'Ali',
+          type: PassengerType.ADULT,
+          ticketNumber: 'ABC234-01',
+        },
+      ]);
+      const json = JSON.stringify(view);
+      for (const secret of [
+        'PASSPORT-X9',
+        'sara@test.com',
+        '+20-PHONE',
+        '1990-01-01',
+      ])
+        expect(json).not.toContain(secret);
+    });
+
+    it("lets the booked airline's moderator see the reduced view", async () => {
+      const b = withPersonalData();
+      h.bookingModel.findById.mockResolvedValue(b);
+      const view = await h.service.viewFor(
+        moderatorOf(b.segments[0].airlineId),
+        b._id.toString(),
+      );
+      expect(JSON.stringify(view)).not.toContain('sara@test.com');
+    });
+
+    it("refuses another airline's moderator and other users", async () => {
+      const b = withPersonalData();
+      h.bookingModel.findById.mockResolvedValue(b);
+      await expect(
+        h.service.findOneFor(
+          moderatorOf(new Types.ObjectId()),
+          b._id.toString(),
+        ),
+      ).rejects.toThrow('You do not have access to this booking');
+      const stranger = {
+        id: new Types.ObjectId().toString(),
+        email: 's@test.com',
+        role: 'user',
+      } as never;
+      await expect(
+        h.service.findOneFor(stranger, b._id.toString()),
+      ).rejects.toThrow('You do not have access to this booking');
+    });
+
+    it("hides other users' drafts, even from an admin", async () => {
+      h.bookingModel.findById.mockResolvedValue(
+        bookingDoc({ status: FlightBookingStatus.DRAFT }),
+      );
+      await expect(
+        h.service.findOneFor(admin, new Types.ObjectId().toString()),
+      ).rejects.toThrow('Booking not found');
+    });
+
+    it('answers 404 for an invalid id', async () => {
+      await expect(h.service.findOneFor(owner, 'abc')).rejects.toThrow(
+        'Booking not found',
+      );
+      expect(h.bookingModel.findById).not.toHaveBeenCalled();
+    });
+  });
 });

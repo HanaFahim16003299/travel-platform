@@ -106,11 +106,11 @@ export class FlightBookingsController {
   @Auth(Role.User, Role.Admin, Role.AirlineModerator)
   @ApiOperation({
     summary:
-      "FLT-25 / ACC-11: booking details (owner, admin, or that airline's moderator). After a cancellation it includes refundAmount, refundStatus (PENDING, REFUNDED, FAILED) and refundId.",
+      "FLT-25 / ACC-11: booking details. The owner gets everything, including refundAmount, refundStatus (PENDING, REFUNDED, FAILED) and refundId after a cancellation. An admin or that airline's moderator gets a reduced view: reference, status, seats, flights with cabin, and passenger names, types and ticket numbers only.",
   })
   @ApiNotFoundResponse({ description: 'Booking not found' })
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.service.findOneFor(user, id);
+    return this.service.viewFor(user, id);
   }
 
   @Post(':id/cancel')
