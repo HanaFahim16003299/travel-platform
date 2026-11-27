@@ -15,18 +15,21 @@ const adult = (over: Partial<PassengerInput> = {}): PassengerInput => ({
   firstName: 'Sara',
   lastName: 'Ali',
   dateOfBirth: '1990-01-01',
+  documentNumber: 'A1',
   type: PassengerType.ADULT,
   email: 'sara@test.com',
   phone: '0100',
   ...over,
 });
 const child: PassengerInput = {
+  documentNumber: 'C1',
   firstName: 'Omar',
   lastName: 'Ali',
   dateOfBirth: '2020-01-01',
   type: PassengerType.CHILD,
 };
 const infant: PassengerInput = {
+  documentNumber: 'I1',
   firstName: 'Lina',
   lastName: 'Ali',
   dateOfBirth: '2026-01-01',
@@ -52,12 +55,12 @@ describe('passenger rules', () => {
 
   it('accepts a family with matching types', () => {
     expect(() =>
-      validatePassengers([adult(), child, infant], TRAVEL),
+      validatePassengers([adult(), child, infant], [TRAVEL]),
     ).not.toThrow();
   });
 
   it('requires at least one adult', () => {
-    expect(() => validatePassengers([child], TRAVEL)).toThrow(
+    expect(() => validatePassengers([child], [TRAVEL])).toThrow(
       'At least one adult',
     );
   });
@@ -66,7 +69,7 @@ describe('passenger rules', () => {
     expect(() =>
       validatePassengers(
         [adult(), infant, { ...infant, firstName: 'Mona' }],
-        TRAVEL,
+        [TRAVEL],
       ),
     ).toThrow('Each infant must travel with an adult');
   });
@@ -75,7 +78,7 @@ describe('passenger rules', () => {
     expect(() =>
       validatePassengers(
         [adult(), { ...child, dateOfBirth: '2010-01-01' }],
-        TRAVEL,
+        [TRAVEL],
       ),
     ).toThrow(BadRequestException);
   });
@@ -84,8 +87,46 @@ describe('passenger rules', () => {
     expect(() =>
       validatePassengers(
         [adult(), { ...infant, dateOfBirth: '2028-01-01' }],
-        TRAVEL,
+        [TRAVEL],
       ),
-    ).toThrow('date of birth is after the flight');
+    ).toThrow('date of birth is after the outbound flight');
+  });
+
+  describe('review C2', () => {
+    const RETURN = new Date('2027-03-20T10:00:00Z');
+
+    it('rejects a child who is already 12 on the return flight', () => {
+      const turnsTwelve = { ...child, dateOfBirth: '2015-03-01' }; // 11 on 15 Feb, 12 on 20 Mar
+      expect(() =>
+        validatePassengers([adult(), turnsTwelve], [TRAVEL, RETURN]),
+      ).toThrow('CHILD on the outbound flight but ADULT on the return flight');
+    });
+
+    it('accepts a round trip when the types stay the same on both legs', () => {
+      expect(() =>
+        validatePassengers([adult(), child, infant], [TRAVEL, RETURN]),
+      ).not.toThrow();
+    });
+
+    it('rejects the same passport/ID number twice, ignoring case and spaces', () => {
+      expect(() =>
+        validatePassengers(
+          [
+            adult({ documentNumber: 'ab123' }),
+            adult({ firstName: 'Mona', documentNumber: ' AB123 ' }),
+          ],
+          [TRAVEL],
+        ),
+      ).toThrow('used by more than one passenger');
+    });
+
+    it('does not require email or phone (FLT-19 asks only for name, birth date and passport/ID)', () => {
+      expect(() =>
+        validatePassengers(
+          [adult({ email: undefined, phone: undefined })],
+          [TRAVEL],
+        ),
+      ).not.toThrow();
+    });
   });
 });

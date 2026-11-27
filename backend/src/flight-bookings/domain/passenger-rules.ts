@@ -7,6 +7,7 @@ export interface PassengerInput {
   firstName: string;
   lastName: string;
   dateOfBirth: string | Date;
+  documentNumber: string;
   type: PassengerType;
   email?: string;
   phone?: string;
@@ -49,9 +50,22 @@ export function seatCountFor(
   return passengers.filter((p) => p.type !== PassengerType.INFANT).length;
 }
 
+/**
+ * FLT-12 / FLT-19 passenger rules, checked against the departure date of EVERY leg
+ * (review C2, Joumana Hozayen):
+ *  - at least one adult, and no more infants than adults;
+ *  - each passenger's type must match their age on each leg's date. A passenger whose
+ *    type changes between legs (e.g. a child who turns 12 before the return flight) is
+ *    rejected with a message to book the legs separately, because one booking holds one
+ *    type, one fare rule and one seat count per passenger;
+ *  - no two passengers with the same passport/ID number.
+ * Team decision: FLT-19 only asks for full name, date of birth and passport/ID, so email
+ * and phone are optional for every passenger (the earlier "required for adults" rule was
+ * extra and has been removed).
+ */
 export function validatePassengers(
   passengers: PassengerInput[],
-  travelDate: Date,
+  legDates: Date[],
 ): void {
   const adults = passengers.filter(
     (p) => p.type === PassengerType.ADULT,
@@ -65,21 +79,33 @@ export function validatePassengers(
   if (infants > adults)
     throw new BadRequestException('Each infant must travel with an adult');
 
+  const documents = new Set<string>();
   for (const p of passengers) {
     const name = `${p.firstName} ${p.lastName}`;
-    const age = ageOn(parseDateOfBirth(p.dateOfBirth), travelDate);
-    if (age < 0)
+    const document = p.documentNumber.trim().toUpperCase();
+    if (documents.has(document))
       throw new BadRequestException(
-        `${name}: date of birth is after the flight`,
+        `Passport/ID number ${p.documentNumber} is used by more than one passenger`,
       );
-    const expected = passengerTypeForAge(age);
-    if (p.type !== expected)
+    documents.add(document);
+
+    const dob = parseDateOfBirth(p.dateOfBirth);
+    legDates.forEach((legDate, leg) => {
+      const flight = leg === 0 ? 'outbound flight' : 'return flight';
+      const age = ageOn(dob, legDate);
+      if (age < 0)
+        throw new BadRequestException(
+          `${name}: date of birth is after the ${flight}`,
+        );
+      const expected = passengerTypeForAge(age);
+      if (p.type === expected) return;
+      if (leg === 0)
+        throw new BadRequestException(
+          `${name} is ${age} on the travel date, so the passenger type must be ${expected}`,
+        );
       throw new BadRequestException(
-        `${name} is ${age} on the travel date, so the passenger type must be ${expected}`,
+        `${name} is ${p.type} on the outbound flight but ${expected} on the return flight; please book the two flights separately`,
       );
-    if (p.type === PassengerType.ADULT && (!p.email || !p.phone))
-      throw new BadRequestException(
-        `${name}: email and phone are required for adults`,
-      );
+    });
   }
 }

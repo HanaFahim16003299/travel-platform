@@ -191,7 +191,11 @@ export class FlightBookingsService implements OnModuleInit {
         );
     }
 
-    validatePassengers(dto.passengers, out.segment.departureAt);
+    // Every leg's date is checked (review C2).
+    validatePassengers(
+      dto.passengers,
+      [out, back].flatMap((l) => (l ? [l.segment.departureAt] : [])),
+    );
 
     const legs = back ? [out, back] : [out];
     const segments = legs.map((l) => l.segment);

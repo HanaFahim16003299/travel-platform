@@ -49,12 +49,16 @@ export class PassengerDto {
   @IsEnum(PassengerType)
   type: PassengerType;
 
-  @ApiPropertyOptional({ description: 'Required for adults' })
+  @ApiPropertyOptional({
+    description: 'Optional contact (FLT-19 does not require it)',
+  })
   @IsOptional()
   @IsEmail()
   email?: string;
 
-  @ApiPropertyOptional({ description: 'Required for adults' })
+  @ApiPropertyOptional({
+    description: 'Optional contact (FLT-19 does not require it)',
+  })
   @IsOptional()
   @IsString()
   phone?: string;
