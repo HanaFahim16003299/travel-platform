@@ -15,11 +15,16 @@ export class ListFlightBookingsQueryDto {
   @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ default: 10 })
+  // GEN-05: 10 bookings per page, like the rest of the project (review C6, Joumana Hozayen).
+  @ApiPropertyOptional({
+    default: 10,
+    maximum: 10,
+    description: 'GEN-05: page size, at most 10',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(50)
+  @Max(10)
   limit: number = 10;
 }
