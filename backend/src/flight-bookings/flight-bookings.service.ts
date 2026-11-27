@@ -38,6 +38,7 @@ import {
 } from './domain/passenger-rules.js';
 import { calculatePrice } from './domain/pricing.js';
 import { legsChanged } from './domain/leg-snapshot.js';
+import { parseHoldMinutes } from './domain/hold-settings.js';
 import { computeRefund } from './domain/refund-rules.js';
 import { generateBookingReference } from './domain/booking-reference.js';
 import { toRestrictedBookingView } from './domain/booking-views.js';
@@ -65,6 +66,10 @@ interface LoadedLeg {
 @Injectable()
 export class FlightBookingsService implements OnModuleInit {
   private readonly logger = new Logger(FlightBookingsService.name);
+  /** FLT-22 hold length, read and validated once at startup (review C5, Joumana Hozayen). */
+  private readonly holdMinutes = parseHoldMinutes(
+    process.env.FLIGHT_HOLD_MINUTES,
+  );
 
   constructor(
     @InjectModel(FlightBooking.name)
@@ -308,8 +313,7 @@ export class FlightBookingsService implements OnModuleInit {
         `Maximum ${maxExtra} extra bag(s) per passenger for this airline`,
       );
 
-    const minutes = Number(process.env.FLIGHT_HOLD_MINUTES ?? 10);
-    return this.seatHolds.holdDraft(draft, minutes, new Date());
+    return this.seatHolds.holdDraft(draft, this.holdMinutes, new Date());
   }
 
   /** Called every minute by the scheduler. */
