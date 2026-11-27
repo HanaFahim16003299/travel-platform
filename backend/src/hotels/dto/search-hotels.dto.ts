@@ -13,11 +13,11 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { TenPerPageQueryDto } from './ten-per-page-query.dto.js';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 
-// GEN-05: page / limit (max 10) come from TenPerPageQueryDto
+// GEN-05: page / limit come from PaginationQueryDto (default page size 10)
 // Changed by Mohamed Hesham: GEN-05.
-export class QuerySearchHotelsDto extends TenPerPageQueryDto {
+export class QuerySearchHotelsDto extends PaginationQueryDto {
   // Changed by Mohamed Hesham: HTL-11. The destination is a city or country
   // name, or (for other modules) a city id. Exactly one of the two is required;
   // the service answers 400 otherwise.
