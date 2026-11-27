@@ -4,7 +4,9 @@ import { HydratedDocument, Types } from 'mongoose';
 export enum FlightStatus {
   Scheduled = 'scheduled',
   Cancelled = 'cancelled',
-  Completed = 'completed',
+  // FLT-30: set by FlightsScheduler once the departure time has passed (was the unused
+  // Completed; renamed by Joumana Hozayen, review C7).
+  Departed = 'departed',
 }
 
 export enum CabinClass {

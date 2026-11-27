@@ -100,9 +100,8 @@ export class FlightsService {
   async update(id: string, dto: UpdateFlightDto, user: AuthUser) {
     const flight = await this.findFlight(id);
     await this.assertFlightOwner(flight, user);
-    if (flight.status === FlightStatus.Cancelled) {
-      throw new ConflictException('Cancelled flights cannot be updated');
-    }
+    // FLT-30: only Scheduled flights can be edited (review C7, Joumana Hozayen).
+    this.assertScheduled(flight);
     if (dto.airlineId && dto.airlineId !== String(flight.airlineId)) {
       const airline = await this.airlineForModerator(dto.airlineId, user);
       if (!airline.isActive)
@@ -155,8 +154,8 @@ export class FlightsService {
     const flight = await this.findFlight(id);
     await this.assertFlightOwner(flight, user);
     if (flight.status === FlightStatus.Cancelled) return flight;
-    if (flight.status === FlightStatus.Completed) {
-      throw new ConflictException('Completed flights cannot be cancelled');
+    if (flight.status === FlightStatus.Departed) {
+      throw new ConflictException('Departed flights cannot be cancelled');
     }
     const cancelled = await this.flightModel.findByIdAndUpdate(
       id,
@@ -600,6 +599,19 @@ export class FlightsService {
         'You can only manage flights for your assigned airline',
       );
     }
+  }
+
+  /**
+   * FLT-30: Scheduled flights whose departure time has passed become Departed, so they
+   * drop out of search, editing and booking. Run by FlightsScheduler (review C7,
+   * Joumana Hozayen).
+   */
+  async markDepartedFlights(now = new Date()) {
+    const result = await this.flightModel.updateMany(
+      { status: FlightStatus.Scheduled, departureTime: { $lte: now } },
+      { $set: { status: FlightStatus.Departed } },
+    );
+    return result.modifiedCount;
   }
 
   private assertScheduled(flight: FlightDocument) {

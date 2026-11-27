@@ -9,6 +9,7 @@ import { Flight, FlightSchema } from './schemas/flight.schema.js';
 import { FlightsController } from './flights.controller.js';
 import { FlightsService } from './flights.service.js';
 import { FlightCancellationHooks } from './flight-cancellation.hooks.js';
+import { FlightsScheduler } from './flights.scheduler.js';
 
 @Module({
   imports: [
@@ -21,7 +22,8 @@ import { FlightCancellationHooks } from './flight-cancellation.hooks.js';
   ],
   controllers: [FlightsController],
   // FlightCancellationHooks: FLT-06 listeners, added by Joumana Hozayen (review A3).
-  providers: [FlightsService, FlightCancellationHooks],
+  // FlightsScheduler: FLT-30 Departed status (Joumana Hozayen, review C7).
+  providers: [FlightsService, FlightCancellationHooks, FlightsScheduler],
   exports: [FlightsService, FlightCancellationHooks, MongooseModule],
 })
 export class FlightsModule {}
