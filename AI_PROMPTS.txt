@@ -402,3 +402,106 @@ admin.module.ts fix), pulled develop, and restarted the backend until the
 payments routes appeared in Swagger. I set up Stripe test keys and the Stripe
 CLI webhook locally and followed the step-by-step Swagger test. I did not
 commit any keys.
+
+
+
+feature/ACC-01-auth-and-guards
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-01, ACC-04, ACC-05, ACC-06, ACC-08
+Prompt:
+Asked Claude to help implement my part (auth, users and account administration) from the team division and project description: registration, login with failed-login lockout, logout and change password using httpOnly cookie tokens.
+How the output was used:
+Reviewed the generated NestJS auth module (user schema, DTOs, auth service and controller) and used it as the base. I checked the password rules, lockout limits and session length against the requirements sheet and adjusted them.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-04, ACC-19
+Prompt:
+Asked Claude to implement the role and ownership guards that the other team members need: a login guard, a roles decorator, a provider-scope guard for moderators and an ownership helper for services.
+How the output was used:
+Used the JwtAuthGuard, RolesGuard, ProviderScopeGuard and assertOwner() helper, then shared the usage (@Auth, @ProviderScope, @CurrentUser) with the team. The guard loads the user on every request so suspension and logout take effect immediately.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-09, ACC-11, ACC-12
+Prompt:
+Asked Claude to implement the profile endpoints: view my profile, update it (without allowing email or role changes) and deactivate my account with password confirmation.
+How the output was used:
+Used the generated users controller and DTOs. I tested in Swagger that sending a role in the update body is rejected with 400.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-07a, ACC-13, ACC-14, ACC-15, ACC-16
+Prompt:
+Asked Claude to implement the admin account endpoints: create moderator accounts assigned to one provider, list accounts with filters and pagination, suspend and reactivate accounts, and admin-assisted password reset.
+How the output was used:
+Used the generated admin accounts service and controller. Suspension and password reset invalidate active sessions. I wired in audit logging and notifications after the shared services were merged.
+================================================
+
+================================================
+Date: 2026-11-18
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: General (project setup)
+Prompt:
+Asked Claude to help me set up the project locally (clone, install packages, .env, Swagger testing) and to fix compile errors: ESM import paths (.js extensions), type-only imports for decorators, enum naming to match the shared Role enum, and the JWT expiry type.
+How the output was used:
+Applied the fixes step by step and checked with npx tsc --noEmit until the build was clean. I did not share any credentials, tokens or the MongoDB connection string with the tool.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: General (merge conflicts)
+Prompt:
+Showed Claude a TypeScript error from admin.module.ts that contained leftover merge-conflict markers, and asked how to resolve it.
+How the output was used:
+Claude explained that both sides were real work (the admin bookings endpoint and the admin seed). I combined both into one module file and told the team.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-15
+Prompt:
+Gave Claude the real audit-log, notification, airline and hotel schema code and asked for provider deactivate/reactivate that hides a provider from search while keeping existing confirmed bookings valid, with audit logging and notifications to the moderator.
+How the output was used:
+Used the generated AdminProvidersService and controller (PATCH /admin/providers/:type/:id/deactivate and /reactivate). It toggles isActive, logs the action and notifies the assigned moderator. I tested it in Swagger.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: FLT-01
+Prompt:
+Asked Claude to add a public GET /api/airlines list (active airlines only, searchable and paginated) so moderators and users can pick an airline.
+How the output was used:
+Used the generated list endpoint and added an admin variant that includes inactive airlines.
+================================================
+
+================================================
+Date: 2026-11-27
+Student: Habiba Karim
+Tool: Claude
+Related Requirement: ACC-06, GEN-07
+Prompt:
+Asked Claude to replace my temporary fake audit and notification services with the team's real AuditLogService and NotificationsService, and to change the default session length from 60 to 30 minutes.
+How the output was used:
+Updated the imports and call fields (actorRole, metadata, title) to match the real services, deleted temp-shared-services.ts and changed the session default to 30 in auth.module.ts and auth.controller.ts.
+================================================
