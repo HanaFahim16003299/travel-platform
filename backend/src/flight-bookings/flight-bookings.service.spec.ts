@@ -633,4 +633,61 @@ describe('FlightBookingsService', () => {
       );
     });
   });
+
+  describe('cancel and cancellation quote (FLT-26, review A7)', () => {
+    it('quotes the same refund that cancel records', async () => {
+      const b = bookingDoc();
+      b.segments[0].cancellationTiers = [
+        { daysBefore: 7, refundPercent: 50 },
+      ] as never;
+      h.bookingModel.findById.mockResolvedValue(b);
+      h.seatHolds.cancelConfirmed.mockResolvedValue({
+        ...b,
+        status: FlightBookingStatus.CANCELLED,
+      });
+
+      const quote = await h.service.cancellationQuote(owner, b._id.toString());
+      const result = await h.service.cancel(owner, b._id.toString());
+
+      expect(quote.refundAmount).toBe(200);
+      expect(result.refundAmount).toBe(quote.refundAmount);
+    });
+
+    it("refuses to cancel someone else's booking", async () => {
+      h.bookingModel.findById.mockResolvedValue(
+        bookingDoc({ userId: new Types.ObjectId() }),
+      );
+      await expect(
+        h.service.cancel(owner, new Types.ObjectId().toString()),
+      ).rejects.toThrow('You do not have access to this booking');
+    });
+
+    it('only cancels confirmed bookings', async () => {
+      h.bookingModel.findById.mockResolvedValue(
+        bookingDoc({ status: FlightBookingStatus.PENDING_PAYMENT }),
+      );
+      await expect(
+        h.service.cancel(owner, new Types.ObjectId().toString()),
+      ).rejects.toThrow('Only confirmed bookings can be cancelled');
+    });
+
+    it('refuses to cancel after departure', async () => {
+      const b = bookingDoc();
+      b.segments[0].departureAt = new Date(Date.now() - 60_000);
+      h.bookingModel.findById.mockResolvedValue(b);
+      await expect(h.service.cancel(owner, b._id.toString())).rejects.toThrow(
+        'Bookings cannot be cancelled after departure',
+      );
+      expect(h.seatHolds.cancelConfirmed).not.toHaveBeenCalled();
+    });
+
+    it('reports a booking that stopped being confirmed during the cancel', async () => {
+      h.bookingModel.findById.mockResolvedValue(bookingDoc());
+      h.seatHolds.cancelConfirmed.mockResolvedValue(null);
+      await expect(
+        h.service.cancel(owner, new Types.ObjectId().toString()),
+      ).rejects.toThrow('Booking is no longer confirmed');
+      expect(h.notifications.create).not.toHaveBeenCalled();
+    });
+  });
 });
