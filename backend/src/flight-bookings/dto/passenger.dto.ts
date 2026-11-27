@@ -1,12 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsDateString,
+  IsISO8601,
   IsEmail,
   IsEnum,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -25,8 +26,17 @@ export class PassengerDto {
   @MaxLength(50)
   lastName: string;
 
-  @ApiProperty({ example: '1998-04-12' })
-  @IsDateString()
+  // Strict calendar date: 1998-02-30 is rejected instead of rolling over to 2 March
+  // (review C1, Joumana Hozayen).
+  @ApiProperty({
+    example: '1998-04-12',
+    description:
+      'Date of birth as YYYY-MM-DD; impossible dates such as 1998-02-30 are rejected',
+  })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'dateOfBirth must be a date in YYYY-MM-DD format',
+  })
+  @IsISO8601({ strict: true, strictSeparator: true })
   dateOfBirth: string;
 
   @ApiProperty({ example: 'A12345678', description: 'Passport or ID number' })

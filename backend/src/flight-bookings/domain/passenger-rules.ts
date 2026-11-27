@@ -13,6 +13,21 @@ export interface PassengerInput {
   extraBags?: number;
 }
 
+/**
+ * The typed YYYY-MM-DD date as midnight UTC. Throws if JavaScript would roll an impossible
+ * date over (e.g. 1998-02-30), so the stored date always equals the typed date (review C1).
+ */
+export function parseDateOfBirth(value: string | Date): Date {
+  if (value instanceof Date) return value;
+  const date = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== value.slice(0, 10)
+  )
+    throw new BadRequestException(`Invalid date of birth: ${value}`);
+  return date;
+}
+
 /** Full years between the date of birth and `on`, both compared in UTC. */
 export function ageOn(dob: Date, on: Date): number {
   let age = on.getUTCFullYear() - dob.getUTCFullYear();
@@ -52,7 +67,7 @@ export function validatePassengers(
 
   for (const p of passengers) {
     const name = `${p.firstName} ${p.lastName}`;
-    const age = ageOn(new Date(p.dateOfBirth), travelDate);
+    const age = ageOn(parseDateOfBirth(p.dateOfBirth), travelDate);
     if (age < 0)
       throw new BadRequestException(
         `${name}: date of birth is after the flight`,

@@ -29,7 +29,11 @@ import {
 } from './dto/create-flight-booking.dto.js';
 import { ListFlightBookingsQueryDto } from './dto/list-flight-bookings.query.dto.js';
 import { SeatHoldService } from './seat-hold.service.js';
-import { seatCountFor, validatePassengers } from './domain/passenger-rules.js';
+import {
+  parseDateOfBirth,
+  seatCountFor,
+  validatePassengers,
+} from './domain/passenger-rules.js';
 import { calculatePrice } from './domain/pricing.js';
 import { computeRefund } from './domain/refund-rules.js';
 import { generateBookingReference } from './domain/booking-reference.js';
@@ -212,7 +216,7 @@ export class FlightBookingsService implements OnModuleInit {
       segments,
       passengers: dto.passengers.map((p) => ({
         ...p,
-        dateOfBirth: new Date(p.dateOfBirth),
+        dateOfBirth: parseDateOfBirth(p.dateOfBirth),
         extraBags: p.extraBags ?? 0,
       })),
       seatCount,
