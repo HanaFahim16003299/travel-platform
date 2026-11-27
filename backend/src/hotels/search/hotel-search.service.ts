@@ -4,6 +4,7 @@ import { Model, Types } from 'mongoose';
 import { Hotel, HotelDocument } from '../schemas/hotel.schema.js';
 import { AvailabilityService } from '../availability/availability.service.js';
 import { QuerySearchHotelsDto } from '../dto/search-hotels.dto.js';
+import { DestinationsService } from '../destinations/destinations.service.js';
 import { assertNotInPast, getNightsBetween } from '../utils/date-range.util.js';
 import { summarizeFreeRooms } from '../utils/free-rooms.util.js';
 import { buildMeta } from '../../common/utils/pagination.js';
@@ -13,6 +14,8 @@ export class HotelSearchService {
   constructor(
     @InjectModel(Hotel.name) private readonly hotelModel: Model<HotelDocument>,
     private readonly availabilityService: AvailabilityService,
+    // Added by Mohamed Hesham: HTL-11, finds the cities of a destination name.
+    private readonly destinations: DestinationsService,
   ) {}
 
   // HTL-11 / HTL-12: active hotels with enough free rooms for the stay,
@@ -20,6 +23,7 @@ export class HotelSearchService {
   async search(query: QuerySearchHotelsDto) {
     const {
       cityId,
+      destination,
       startDate,
       endDate,
       guests,
@@ -41,12 +45,24 @@ export class HotelSearchService {
       throw new BadRequestException('minPrice cannot be greater than maxPrice');
     }
 
+    // Changed by Mohamed Hesham: HTL-11, send a destination name or a city id
+    if (Boolean(cityId) === Boolean(destination)) {
+      throw new BadRequestException('Send either destination or cityId');
+    }
+
     // checks endDate > startDate and that check-in is not in the past
     const nights = getNightsBetween(startDate, endDate);
     assertNotInPast(nights[0]);
 
+    const cityIds = cityId
+      ? [new Types.ObjectId(cityId)]
+      : await this.destinations.findCityIds(destination as string);
+    if (cityIds.length === 0) {
+      return { data: [], meta: buildMeta(0, page, limit) };
+    }
+
     const hotelFilter: Record<string, unknown> = {
-      cityId: new Types.ObjectId(cityId),
+      cityId: { $in: cityIds },
       isActive: true,
     };
     if (minRating !== undefined) {

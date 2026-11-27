@@ -91,11 +91,14 @@ describe('HotelSearchService (HTL-11/HTL-12, GEN-05)', () => {
       return map;
     });
     const availabilityService = { findFreeRoomsByHotel };
+    // Added by Mohamed Hesham: HTL-11, a destination name finds these cities.
+    const destinations = { findCityIds: vi.fn(async () => [hotelId(1)]) };
     const service = new HotelSearchService(
       hotelModel as never,
       availabilityService as never,
+      destinations as never,
     );
-    return { service, hotelModel, findFreeRoomsByHotel };
+    return { service, hotelModel, findFreeRoomsByHotel, destinations };
   }
 
   it('excludes a hotel whose free rooms cannot cover the guests', async () => {
@@ -265,6 +268,68 @@ describe('HotelSearchService (HTL-11/HTL-12, GEN-05)', () => {
     expect(result.data).toHaveLength(1);
     expect(result.data[0].name).toBe('B'); // second cheapest, by price asc
     expect(result.meta).toEqual({ total: 3, page: 2, limit: 1, totalPages: 3 });
+  });
+
+  describe('destination (HTL-11)', () => {
+    const { cityId: _cityId, ...withoutCity } = baseQuery;
+
+    it('searches the cities that match a destination name', async () => {
+      const cityIds = [hotelId(7), hotelId(8)];
+      const { service, hotelModel, destinations } = build([hotel(1)], {});
+      destinations.findCityIds.mockResolvedValue(cityIds);
+
+      await service.search({ ...withoutCity, destination: 'Egypt' });
+
+      expect(destinations.findCityIds).toHaveBeenCalledWith('Egypt');
+      expect(hotelModel.find).toHaveBeenCalledWith({
+        cityId: { $in: cityIds },
+        isActive: true,
+      });
+    });
+
+    it('searches the given city id without looking up destinations', async () => {
+      const { service, hotelModel, destinations } = build([hotel(1)], {});
+
+      await service.search(baseQuery);
+
+      expect(destinations.findCityIds).not.toHaveBeenCalled();
+      expect(hotelModel.find).toHaveBeenCalledWith({
+        cityId: { $in: [hotelId(1)] },
+        isActive: true,
+      });
+    });
+
+    it('returns an empty page without querying hotels when no city matches', async () => {
+      const { service, hotelModel, destinations } = build([hotel(1)], {});
+      destinations.findCityIds.mockResolvedValue([]);
+
+      const result = await service.search({
+        ...withoutCity,
+        destination: 'Atlantis',
+      });
+
+      expect(result.data).toEqual([]);
+      expect(result.meta.total).toBe(0);
+      expect(hotelModel.find).not.toHaveBeenCalled();
+    });
+
+    it('throws 400 when neither destination nor cityId is sent', async () => {
+      const { service, destinations } = build([], {});
+
+      await expect(service.search(withoutCity)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(destinations.findCityIds).not.toHaveBeenCalled();
+    });
+
+    it('throws 400 when both destination and cityId are sent', async () => {
+      const { service, destinations } = build([], {});
+
+      await expect(
+        service.search({ ...baseQuery, destination: 'Cairo' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(destinations.findCityIds).not.toHaveBeenCalled();
+    });
   });
 
   it('returns data: [] and total 0 without calling the availability service when no hotels match', async () => {

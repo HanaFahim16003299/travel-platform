@@ -193,6 +193,118 @@ Verify before you report (run them, do not assume):
 Report: files changed (short diff summary), the exact output of every check, and anything you decided that is not written above. Leave no scratch files; git status must show only intended files (my existing uncommitted changes in other files are expected).
  develop
 
+feat/hotels-gaps-htl-02-06-08 and feat/GEN-12-reference-data-seeding (Mohamed Hesham, section 8.5 hotels)
+
+Date: 2026-11-25
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-22
+Prompt:
+Asked Claude to explain the HTL-22 requirement and then help build the
+moderator reservations list (GET /hotels/:hotelId/reservations) as separate
+files in hotel-bookings/reservations/, without changing the booking logic.
+How the output was used:
+Reviewed the controller, service and spec. Decided that expired reservations
+are hidden by default and that only a fixed list of fields is returned.
+Tested the endpoint in Swagger with a moderator and with another hotel's
+moderator (403), and checked the filter values (400 on a bad status).
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude Code (Anthropic)
+Related Requirement: HTL-16, HTL-17, HTL-18, HTL-23
+Prompt:
+Gave Claude Code a task to complete the missing hotel-booking parts: store
+ids as ObjectIds, hold rooms for 10 minutes, booking reference, confirmation
+notification, adults and children per room, and the Completed status with a
+scheduler. This was merged in PR #15.
+How the output was used:
+Reviewed it afterwards and decided it was too much code to explain. Later
+pull request #16 restored the earlier versions of those booking files and
+kept only the booking reference (next entry). The remaining items are left to
+the hotel-booking owner and the payments work.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-17
+Prompt:
+Asked Claude to redo only the booking reference, as small as possible, and to
+explain the reason for every edit first: a 6-character code without
+confusing characters (no 0, O, 1, I), created when a booking is confirmed,
+with a unique sparse index as the real guard against duplicates.
+How the output was used:
+Reviewed each edit before it was applied (schema field, generator method in
+the hotel booking service, one line in confirmBooking). Checked with unit
+tests that the code is unique, retried up to 5 times, and kept when a booking
+is confirmed again. It cannot be tried end to end until payments call
+confirmBooking.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-08
+Prompt:
+Asked Claude how the room status view can show the reservation reference for
+booked nights, using the booking reference above.
+How the output was used:
+Reviewed the change in availability.service.ts: one extra query for all
+booked nights of the page (no query per night). Added three unit tests and
+checked them by temporarily breaking the code to see the tests fail.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: GEN-05
+Prompt:
+Asked Claude for the GEN-05 requirement before implementing anything, then
+asked it to paginate GET /hotels/:hotelId/rooms/available.
+How the output was used:
+Decided to keep the page size and limit at 10, because the requirement sheet
+says page size 10 and does not mention 100. A small shared query class
+(ten-per-page-query.dto.ts) is used by the hotel search, the availability
+view, the free rooms list and the hotel details. Added tests for the limit.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-02
+Prompt:
+Asked Claude to show the HTL-02 requirement first, then to add the available
+rooms to GET /hotels/:id when check-in and check-out dates are sent.
+How the output was used:
+Reviewed the change. Decided to leave reviews out of the hotel details,
+because GET /hotels/:id/reviews already exists. Sending only one of the two
+dates returns 400. The hotel details reuse the existing available-rooms
+service. Added four unit tests.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: HTL-06
+Prompt:
+Asked Claude to close the room deletion edge case: a room that was ever
+reserved must not be deleted, even if its booking was cancelled or expired.
+How the output was used:
+Reviewed the change in rooms.service.ts: deletion is refused when the room is
+booked on any night or when any hotel booking ever contained the room (both
+checks run together). Added a test for a released booking.
+
+Date: 2026-11-26
+Student: Mohamed Hesham
+Tool: Claude (Anthropic), chat with file and test tools
+Related Requirement: GEN-12
+Prompt:
+Asked Claude to check the official reference datasets and the merged
+reference-data code, and to add the missing wiring so the data is seeded when
+the application starts, with tests for the CSV parser, the validation, the
+fixed ids and the seeder.
+How the output was used:
+Checked the CSV files against the official sheet (identical). Registered the
+four schemas and the seeder in the module and added 22 unit tests. Confirmed
+in the running application that the log shows 8 countries, 8 cities, 8
+airports and 8 attractions. All 126 tests and the TypeScript build pass.
+
 ================================================
 Date: 2026-11-25
 Student: Yusuf Shehabeldin Ali
