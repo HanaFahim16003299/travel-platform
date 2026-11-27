@@ -10,11 +10,17 @@ import {
   FlightBooking,
   FlightBookingSchema,
 } from './schemas/flight-booking.schema.js';
+import {
+  Airport,
+  AirportSchema,
+} from '../reference-data/schemas/airport.schema.js';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: FlightBooking.name, schema: FlightBookingSchema },
+      // E-ticket airport codes and time zones (review D2, Joumana Hozayen).
+      { name: Airport.name, schema: AirportSchema },
     ]),
     // Gives us FlightsService.reserveSeats plus the Flight and Airline models.
     // NotificationsModule and AuthModule are @Global, so no import is needed for them.

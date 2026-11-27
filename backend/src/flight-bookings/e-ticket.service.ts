@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { InjectConnection } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
-import type { Connection } from 'mongoose';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { Airport } from '../reference-data/schemas/airport.schema.js';
+import type { AirportDocument } from '../reference-data/schemas/airport.schema.js';
 import PDFDocument from 'pdfkit';
 import type { FlightBookingDocument } from './schemas/flight-booking.schema.js';
 
@@ -10,27 +11,25 @@ type AirportInfo = { code: string; timeZone: string };
 /** Builds the PDF e-ticket (FLT-23). Times are printed in each airport's own time zone. */
 @Injectable()
 export class ETicketService {
-  constructor(@InjectConnection() private readonly connection: Connection) {}
+  // Typed Airport model instead of reading 'airports' with guessed field names
+  // (review D2, Joumana Hozayen).
+  constructor(
+    @InjectModel(Airport.name)
+    private readonly airportModel: Model<AirportDocument>,
+  ) {}
 
-  /** Reads airports from Hana's seeded "airports" collection; falls back to UTC if missing. */
-  private async loadAirports(
-    ids: Types.ObjectId[],
-  ): Promise<Map<string, AirportInfo>> {
-    const map = new Map<string, AirportInfo>();
-    try {
-      const docs = await this.connection
-        .collection('airports')
-        .find({ _id: { $in: ids } })
-        .toArray();
-      for (const a of docs) {
-        const code = String(a.iataCode ?? a.iata ?? a.code ?? a.name ?? a._id);
-        const timeZone = String(a.timeZone ?? a.timezone ?? a.tz ?? 'UTC');
-        map.set(String(a._id), { code, timeZone });
-      }
-    } catch {
-      // no airports collection yet: fall back below
-    }
-    return map;
+  /** IATA code and IANA time zone of each airport; unknown airports fall back to UTC in build(). */
+  async loadAirports(ids: Types.ObjectId[]): Promise<Map<string, AirportInfo>> {
+    const docs = await this.airportModel
+      .find({ _id: { $in: ids } })
+      .select('iataCode timeZone')
+      .lean();
+    return new Map(
+      docs.map((a) => [
+        String(a._id),
+        { code: a.iataCode, timeZone: a.timeZone },
+      ]),
+    );
   }
 
   private formatTime(date: Date, timeZone: string) {
