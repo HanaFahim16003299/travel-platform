@@ -4,10 +4,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
-import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { InjectModel } from '@nestjs/mongoose';
 import { isValidObjectId, Model, Types } from 'mongoose';
-import type { Connection } from 'mongoose';
 import type { Response } from 'express';
 import type { AuthUser } from '../auth/decorators.js';
 import { Role } from '../common/enums/index.js';
@@ -22,32 +22,27 @@ import { UpdateFlightDto } from './dto/update-flight.dto.js';
 import { CreateCabinDto } from './dto/create-cabin.dto.js';
 import { UpdateCabinDto } from './dto/update-cabin.dto.js';
 import { SearchFlightsDto } from './dto/search-flights.dto.js';
+import { FlightCancellationHooks } from './flight-cancellation.hooks.js';
+import { FlightBooking } from '../flight-bookings/schemas/flight-booking.schema.js';
+import type { FlightBookingDocument } from '../flight-bookings/schemas/flight-booking.schema.js';
+import { FlightBookingStatus } from '../flight-bookings/flight-booking.enums.js';
+import {
+  PASSENGER_EXPORT_COLUMNS,
+  toModeratorBookingView,
+  toPassengerExportRows,
+} from '../flight-bookings/domain/booking-views.js';
+
+/** FLT-29: moderators only see bookings that were really made (review A4). */
+const MODERATOR_VISIBLE_STATUSES = [
+  FlightBookingStatus.CONFIRMED,
+  FlightBookingStatus.CANCELLED,
+];
 import {
   CabinClass,
   Flight,
   FlightDocument,
   FlightStatus,
 } from './schemas/flight.schema.js';
-
-type PassengerData = {
-  firstName?: string;
-  lastName?: string;
-  name?: string;
-  email?: string;
-  phone?: string;
-};
-
-type BookingRecord = {
-  _id: Types.ObjectId;
-  flightId?: Types.ObjectId;
-  passengers?: PassengerData[];
-  passenger?: PassengerData;
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  phone?: string;
-  [key: string]: unknown;
-};
 
 @Injectable()
 export class FlightsService {
@@ -56,7 +51,12 @@ export class FlightsService {
     private readonly flightModel: Model<FlightDocument>,
     @InjectModel(Airline.name)
     private readonly airlineModel: Model<AirlineDocument>,
-    @InjectConnection() private readonly connection: Connection,
+    // Typed FlightBooking model instead of reading 'flightbookings' by name (review D2/A4).
+    @InjectModel(FlightBooking.name)
+    private readonly bookingModel: Model<FlightBookingDocument>,
+    // FLT-06: lets flight bookings react to a cancelled flight. Joumana Hozayen (review A3).
+    @Optional()
+    private readonly cancellationHooks?: FlightCancellationHooks,
   ) {}
 
   async create(dto: CreateFlightDto, user: AuthUser) {
@@ -100,9 +100,8 @@ export class FlightsService {
   async update(id: string, dto: UpdateFlightDto, user: AuthUser) {
     const flight = await this.findFlight(id);
     await this.assertFlightOwner(flight, user);
-    if (flight.status === FlightStatus.Cancelled) {
-      throw new ConflictException('Cancelled flights cannot be updated');
-    }
+    // FLT-30: only Scheduled flights can be edited (review C7, Joumana Hozayen).
+    this.assertScheduled(flight);
     if (dto.airlineId && dto.airlineId !== String(flight.airlineId)) {
       const airline = await this.airlineForModerator(dto.airlineId, user);
       if (!airline.isActive)
@@ -155,14 +154,18 @@ export class FlightsService {
     const flight = await this.findFlight(id);
     await this.assertFlightOwner(flight, user);
     if (flight.status === FlightStatus.Cancelled) return flight;
-    if (flight.status === FlightStatus.Completed) {
-      throw new ConflictException('Completed flights cannot be cancelled');
+    if (flight.status === FlightStatus.Departed) {
+      throw new ConflictException('Departed flights cannot be cancelled');
     }
-    return this.flightModel.findByIdAndUpdate(
+    const cancelled = await this.flightModel.findByIdAndUpdate(
       id,
       { $set: { status: FlightStatus.Cancelled } },
       { new: true },
     );
+    // FLT-06: release holds, cancel confirmed bookings with a full refund and notify
+    // passengers. Added by Joumana Hozayen (review A3).
+    await this.cancellationHooks?.notifyCancelled(id);
+    return cancelled;
   }
 
   async addCabin(id: string, dto: CreateCabinDto, user: AuthUser) {
@@ -383,56 +386,44 @@ export class FlightsService {
     throw new ConflictException('Not enough seats are available');
   }
 
+  /**
+   * FLT-29: bookings on this flight for its airline moderator (or an admin).
+   * Matches return legs too (segments.flightId), lists only Confirmed and Cancelled
+   * bookings, and returns names, cabin, seats and status only, never passport numbers,
+   * emails or phones. Updated by Joumana Hozayen (review A4).
+   */
   async bookings(id: string, user: AuthUser, query: PaginationQueryDto) {
     const flight = await this.findFlight(id);
     await this.assertFlightOwner(flight, user);
-    const collection =
-      this.connection.collection<BookingRecord>('flightbookings');
-    const filter = { flightId: new Types.ObjectId(id) };
-    const [data, total] = await Promise.all([
-      collection
+    const filter = this.moderatorBookingFilter(id);
+    const [bookings, total] = await Promise.all([
+      this.bookingModel
         .find(filter)
         .sort({ createdAt: -1 })
         .skip((query.page - 1) * query.limit)
         .limit(query.limit)
-        .toArray(),
-      collection.countDocuments(filter),
+        .lean(),
+      this.bookingModel.countDocuments(filter),
     ]);
+    const data = bookings.map((b) => toModeratorBookingView(b, id));
     return { data, meta: buildMeta(total, query.page, query.limit) };
   }
 
+  /** FLT-29: passenger CSV with booking reference, status, cabin and seats (review A4). */
   async exportPassengers(id: string, user: AuthUser, response: Response) {
     const flight = await this.findFlight(id);
     await this.assertFlightOwner(flight, user);
-    const bookings = await this.connection
-      .collection<BookingRecord>('flightbookings')
-      .find({ flightId: new Types.ObjectId(id) })
-      .toArray();
-    const rows = bookings.flatMap((booking) => {
-      const passengers = booking.passengers?.length
-        ? booking.passengers
-        : [booking.passenger ?? booking];
-      return passengers.map((passenger) => ({
-        bookingId: String(booking._id),
-        firstName: passenger.firstName ?? '',
-        lastName: passenger.lastName ?? '',
-        name: passenger.name ?? '',
-        email: passenger.email ?? '',
-        phone: passenger.phone ?? '',
-      }));
-    });
-    const columns = [
-      'bookingId',
-      'firstName',
-      'lastName',
-      'name',
-      'email',
-      'phone',
-    ] as const;
+    const bookings = await this.bookingModel
+      .find(this.moderatorBookingFilter(id))
+      .sort({ createdAt: 1 })
+      .lean();
+    const rows = bookings.flatMap((b) => toPassengerExportRows(b, id));
     const csv = [
-      columns.join(','),
+      PASSENGER_EXPORT_COLUMNS.join(','),
       ...rows.map((row) =>
-        columns.map((column) => this.csvCell(row[column])).join(','),
+        PASSENGER_EXPORT_COLUMNS.map((column) =>
+          this.csvCell(row[column]),
+        ).join(','),
       ),
     ].join('\r\n');
     response.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -441,6 +432,13 @@ export class FlightsService {
       `attachment; filename="flight-${id}-passengers.csv"`,
     );
     response.send(csv);
+  }
+
+  private moderatorBookingFilter(flightId: string) {
+    return {
+      'segments.flightId': new Types.ObjectId(flightId),
+      status: { $in: MODERATOR_VISIBLE_STATUSES },
+    };
   }
 
   private async searchLeg(
@@ -601,6 +599,19 @@ export class FlightsService {
         'You can only manage flights for your assigned airline',
       );
     }
+  }
+
+  /**
+   * FLT-30: Scheduled flights whose departure time has passed become Departed, so they
+   * drop out of search, editing and booking. Run by FlightsScheduler (review C7,
+   * Joumana Hozayen).
+   */
+  async markDepartedFlights(now = new Date()) {
+    const result = await this.flightModel.updateMany(
+      { status: FlightStatus.Scheduled, departureTime: { $lte: now } },
+      { $set: { status: FlightStatus.Departed } },
+    );
+    return result.modifiedCount;
   }
 
   private assertScheduled(flight: FlightDocument) {

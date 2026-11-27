@@ -2,58 +2,67 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  HttpException,
   Injectable,
   InternalServerErrorException,
+  HttpException,
+  HttpStatus,
   Logger,
   NotFoundException,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
-import { BookingGatewayRegistry } from '../payments/booking-gateway.registry.js';
-import { BookingType } from '../payments/enums/payment.enums.js';
-import { PaymentsService } from '../payments/payments.service.js';
-import { RefundsService } from '../payments/refunds.service.js';
 import { InjectModel } from '@nestjs/mongoose';
+import { BookingGatewayRegistry } from '../payments/booking-gateway.registry.js';
+import {
+  BookingType,
+  RefundStatus as PaymentRefundStatus,
+} from '../payments/enums/payment.enums.js';
+import { RefundsService } from '../payments/refunds.service.js';
 import { isValidObjectId, Model, Types } from 'mongoose';
-import { randomBytes } from 'node:crypto';
 import type { AuthUser } from '../auth/decorators.js';
 import { ProviderType, Role } from '../common/enums/index.js';
 import { buildMeta } from '../common/utils/pagination.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { NotificationType } from '../notifications/notification-types.js';
-import { FlightsService } from '../flights/flights.service.js';
 import { Flight, FlightStatus } from '../flights/schemas/flight.schema.js';
+import { FlightCancellationHooks } from '../flights/flight-cancellation.hooks.js';
 import type { FlightDocument } from '../flights/schemas/flight.schema.js';
 import { Airline } from '../airlines/schemas/airline.schema.js';
 import type { AirlineDocument } from '../airlines/schemas/airline.schema.js';
 import { FlightBooking, Segment } from './schemas/flight-booking.schema.js';
 import type { FlightBookingDocument } from './schemas/flight-booking.schema.js';
-import { FlightBookingStatus as S, PassengerType } from './flight-booking.enums.js';
-import { CreateFlightBookingDto, SegmentSelectionDto } from './dto/create-flight-booking.dto.js';
-import { PassengerDto } from './dto/passenger.dto.js';
+import { FlightBookingStatus, RefundStatus } from './flight-booking.enums.js';
+import {
+  CreateFlightBookingDto,
+  SegmentSelectionDto,
+} from './dto/create-flight-booking.dto.js';
 import { ListFlightBookingsQueryDto } from './dto/list-flight-bookings.query.dto.js';
+import { SeatHoldService } from './seat-hold.service.js';
+import {
+  parseDateOfBirth,
+  seatCountFor,
+  validatePassengers,
+} from './domain/passenger-rules.js';
+import { calculatePrice } from './domain/pricing.js';
+import { legsChanged } from './domain/leg-snapshot.js';
+import { parseHoldMinutes } from './domain/hold-settings.js';
+import { computeRefund } from './domain/refund-rules.js';
+import { generateBookingReference } from './domain/booking-reference.js';
+import { toRestrictedBookingView } from './domain/booking-views.js';
 
-const REF_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 chars, no 0/O/1/I
 const DAY_MS = 24 * 60 * 60 * 1000;
-const HOUR_MS = 60 * 60 * 1000;
-const INFANT_FARE_FACTOR = 0.1; // FLT-12: infants pay 10%
-const round2 = (x: number) => Math.round(x * 100) / 100;
 
-/** Extra airline-policy fields required by FLT-08 / FLT-09 that the Airline schema may not have yet. */
-type BaggagePolicyLike = {
-  checkedBags?: number;
-  checkedBagWeightKg?: number;
-  extraBagPrice?: number;
-  maxExtraBags?: number;
-};
-type CancellationPolicyLike = {
-  refundable?: boolean;
-  refundPercentage?: number;
-  cancellationFee?: number;
-  cancellationDeadlineHours?: number;
-  tiers?: { daysBefore: number; refundPercent: number }[];
-};
+/** Review C4: limits that stop one user hoarding seats or piling up drafts. Joumana Hozayen. */
+export const MAX_OPEN_DRAFTS_PER_USER = 5;
+export const MAX_ACTIVE_HOLDS_PER_USER = 2;
+
+/** Plain copy of a Mongoose subdocument (or of an already-plain object). */
+function toPlain<T extends object>(doc: T): T {
+  const withToObject = doc as T & { toObject?: () => T };
+  return typeof withToObject.toObject === 'function'
+    ? withToObject.toObject()
+    : { ...doc };
+}
 
 interface LoadedLeg {
   segment: Segment;
@@ -64,6 +73,10 @@ interface LoadedLeg {
 @Injectable()
 export class FlightBookingsService implements OnModuleInit {
   private readonly logger = new Logger(FlightBookingsService.name);
+  /** FLT-22 hold length, read and validated once at startup (review C5, Joumana Hozayen). */
+  private readonly holdMinutes = parseHoldMinutes(
+    process.env.FLIGHT_HOLD_MINUTES,
+  );
 
   constructor(
     @InjectModel(FlightBooking.name)
@@ -72,14 +85,19 @@ export class FlightBookingsService implements OnModuleInit {
     private readonly flightModel: Model<FlightDocument>,
     @InjectModel(Airline.name)
     private readonly airlineModel: Model<AirlineDocument>,
-    private readonly flightsService: FlightsService,
+    private readonly seatHolds: SeatHoldService,
     private readonly notifications: NotificationsService,
-    @Optional() private readonly paymentsService?: PaymentsService,
+    private readonly flightCancellations: FlightCancellationHooks,
     @Optional() private readonly refundsService?: RefundsService,
     @Optional() private readonly gatewayRegistry?: BookingGatewayRegistry,
   ) {}
 
   onModuleInit() {
+    // FLT-06: when an airline cancels a flight, cancel its bookings (review A3, Joumana Hozayen).
+    this.flightCancellations.register({
+      onFlightCancelled: (flightId) => this.cancelAllForFlight(flightId),
+    });
+    // PAY-01/PAY-02: the payments module reaches flight bookings through this gateway.
     this.gatewayRegistry?.register(BookingType.Flight, {
       getPolicies: (user, id) => this.getPolicies(user, id),
       acceptPolicies: (user, id) => this.acceptPolicies(user, id),
@@ -99,19 +117,27 @@ export class FlightBookingsService implements OnModuleInit {
     const flight = await this.flightModel.findById(sel.flightId).lean();
     if (!flight) throw new NotFoundException('Flight not found');
     if (flight.status !== FlightStatus.Scheduled)
-      throw new ConflictException(`Flight ${flight.flightNumber} is not available for booking`);
+      throw new ConflictException(
+        `Flight ${flight.flightNumber} is not available for booking`,
+      );
     if (new Date(flight.departureTime).getTime() <= Date.now())
-      throw new ConflictException(`Flight ${flight.flightNumber} has already departed`);
+      throw new ConflictException(
+        `Flight ${flight.flightNumber} has already departed`,
+      );
 
     const airline = await this.airlineModel.findById(flight.airlineId).lean();
     if (!airline || !airline.isActive)
-      throw new ConflictException('Bookings are not available for an inactive airline');
+      throw new ConflictException(
+        'Bookings are not available for an inactive airline',
+      );
 
     const cabin = flight.cabins.find((c) => String(c._id) === sel.cabinId);
-    if (!cabin) throw new BadRequestException('Cabin does not belong to this flight');
+    if (!cabin)
+      throw new BadRequestException('Cabin does not belong to this flight');
 
-    const baggage = (airline.baggagePolicy ?? {}) as BaggagePolicyLike;
-    const cancel = (airline.cancellationPolicy ?? {}) as CancellationPolicyLike;
+    // FLT-08 / FLT-09 policies come straight from the Airline schema (review A1).
+    const baggage = airline.baggagePolicy;
+    const cancel = airline.cancellationPolicy;
 
     return {
       availableSeats: cabin.availableSeats,
@@ -121,94 +147,25 @@ export class FlightBookingsService implements OnModuleInit {
         cabinId: new Types.ObjectId(sel.cabinId),
         airlineId: new Types.ObjectId(String(flight.airlineId)),
         flightNumber: flight.flightNumber,
-        departureAirportId: new Types.ObjectId(String(flight.departureAirportId)),
+        departureAirportId: new Types.ObjectId(
+          String(flight.departureAirportId),
+        ),
         arrivalAirportId: new Types.ObjectId(String(flight.arrivalAirportId)),
         departureAt: new Date(flight.departureTime),
         arrivalAt: new Date(flight.arrivalTime),
         cabinClass: cabin.cabinClass,
         unitPrice: cabin.price,
-        freeCheckedBags: baggage.checkedBags ?? 0,
-        checkedBagWeightKg: baggage.checkedBagWeightKg,
-        extraBagPrice: baggage.extraBagPrice ?? 0,
-        maxExtraBags: baggage.maxExtraBags ?? 0,
-        cancellationTiers: cancel.tiers ?? [],
-        refundable: cancel.refundable ?? false,
-        refundPercentage: cancel.refundPercentage ?? 0,
-        cancellationFee: cancel.cancellationFee ?? 0,
-        cancellationDeadlineHours: cancel.cancellationDeadlineHours ?? 0,
+        freeCheckedBags: baggage?.checkedBags ?? 0,
+        checkedBagWeightKg: baggage?.checkedBagWeightKg,
+        extraBagPrice: baggage?.extraBagPrice ?? 0,
+        maxExtraBags: baggage?.maxExtraBags ?? 0,
+        cancellationTiers: cancel?.tiers ?? [],
+        refundable: cancel?.refundable ?? false,
+        refundPercentage: cancel?.refundPercentage ?? 0,
+        cancellationFee: cancel?.cancellationFee ?? 0,
+        cancellationDeadlineHours: cancel?.cancellationDeadlineHours ?? 0,
       },
     };
-  }
-
-  private ageOn(dob: Date, on: Date): number {
-    let age = on.getUTCFullYear() - dob.getUTCFullYear();
-    const m = on.getUTCMonth() - dob.getUTCMonth();
-    if (m < 0 || (m === 0 && on.getUTCDate() < dob.getUTCDate())) age--;
-    return age;
-  }
-
-  /** FLT-12 / FLT-19 passenger rules. */
-  private validatePassengers(passengers: PassengerDto[], travelDate: Date) {
-    const adults = passengers.filter((p) => p.type === PassengerType.ADULT).length;
-    const infants = passengers.filter((p) => p.type === PassengerType.INFANT).length;
-    if (adults === 0) throw new BadRequestException('At least one adult is required');
-    // Infants sit on an adult's lap, so at most one infant per adult (documented assumption)
-    if (infants > adults) throw new BadRequestException('Each infant must travel with an adult');
-
-    for (const p of passengers) {
-      const name = `${p.firstName} ${p.lastName}`;
-      const age = this.ageOn(new Date(p.dateOfBirth), travelDate);
-      if (age < 0) throw new BadRequestException(`${name}: date of birth is after the flight`);
-      // Assumption: infant under 2, child 2–11, adult 12+ on the travel date
-      const expected =
-        age < 2 ? PassengerType.INFANT : age < 12 ? PassengerType.CHILD : PassengerType.ADULT;
-      if (p.type !== expected)
-        throw new BadRequestException(
-          `${name} is ${age} on the travel date, so the passenger type must be ${expected}`,
-        );
-      if (p.type === PassengerType.ADULT && (!p.email || !p.phone))
-        throw new BadRequestException(`${name}: email and phone are required for adults`);
-    }
-  }
-
-  /** Price per leg: seats × fare + infants × 10% fare + extra bags × bag price. */
-  private price(segments: Segment[], passengers: PassengerDto[]) {
-    const seatPax = passengers.filter((p) => p.type !== PassengerType.INFANT).length;
-    const infants = passengers.length - seatPax;
-    const bags = passengers.reduce((n, p) => n + (p.extraBags ?? 0), 0);
-    let baseFare = 0;
-    let baggageFees = 0;
-    for (const s of segments) {
-      baseFare += seatPax * s.unitPrice + infants * INFANT_FARE_FACTOR * s.unitPrice;
-      baggageFees += bags * s.extraBagPrice; // charged on each leg
-    }
-    return {
-      baseFare: round2(baseFare),
-      baggageFees: round2(baggageFees),
-      totalPrice: round2(baseFare + baggageFees),
-    };
-  }
-
-  /** Gives seats back to a cabin (the opposite of FlightsService.reserveSeats). */
-  private async releaseSeats(flightId: Types.ObjectId, cabinId: Types.ObjectId, count: number) {
-    await this.flightModel.updateOne(
-      { _id: flightId, 'cabins._id': cabinId },
-      { $inc: { 'cabins.$.availableSeats': count } },
-    );
-  }
-
-  private async releaseSegments(segments: Segment[], count: number) {
-    for (const s of segments) {
-      try {
-        await this.releaseSeats(s.flightId, s.cabinId, count);
-      } catch (e) {
-        this.logger.error(`Failed to release ${count} seats on flight ${String(s.flightId)}: ${String(e)}`);
-      }
-    }
-  }
-
-  private generateReference(): string {
-    return Array.from(randomBytes(6), (b) => REF_ALPHABET[b % REF_ALPHABET.length]).join('');
   }
 
   private async findByIdOr404(id: string) {
@@ -218,9 +175,22 @@ export class FlightBookingsService implements OnModuleInit {
     return b;
   }
 
-  private notify(userId: unknown, type: string, title: string, message: string, bookingId: string) {
+  private notify(
+    userId: unknown,
+    type: string,
+    title: string,
+    message: string,
+    bookingId: string,
+  ) {
     return this.notifications
-      .create({ userId: String(userId), type, title, message, referenceType: 'flight_booking', referenceId: bookingId })
+      .create({
+        userId: String(userId),
+        type,
+        title,
+        message,
+        referenceType: 'flight_booking',
+        referenceId: bookingId,
+      })
       .catch((e) => this.logger.error(`Notification failed: ${String(e)}`));
   }
 
@@ -229,33 +199,59 @@ export class FlightBookingsService implements OnModuleInit {
   // ---------------------------------------------------------------------------
 
   async createDraft(user: AuthUser, dto: CreateFlightBookingDto) {
+    const openDrafts = await this.bookingModel.countDocuments({
+      userId: new Types.ObjectId(user.id),
+      status: FlightBookingStatus.DRAFT,
+    });
+    if (openDrafts >= MAX_OPEN_DRAFTS_PER_USER)
+      throw new HttpException(
+        `You already have ${MAX_OPEN_DRAFTS_PER_USER} unfinished bookings. Hold or let one expire before starting another.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     const out = await this.loadLeg(dto.outbound);
     const back = dto.inbound ? await this.loadLeg(dto.inbound) : null;
 
     if (back) {
       const o = out.segment;
       const r = back.segment;
-      if (String(r.departureAirportId) !== String(o.arrivalAirportId) || String(r.arrivalAirportId) !== String(o.departureAirportId))
-        throw new BadRequestException('The return flight must fly the reverse route');
+      if (
+        String(r.departureAirportId) !== String(o.arrivalAirportId) ||
+        String(r.arrivalAirportId) !== String(o.departureAirportId)
+      )
+        throw new BadRequestException(
+          'The return flight must fly the reverse route',
+        );
       if (r.departureAt <= o.arrivalAt)
-        throw new BadRequestException('The return flight must depart after the outbound flight arrives');
+        throw new BadRequestException(
+          'The return flight must depart after the outbound flight arrives',
+        );
       if (back.currency !== out.currency)
-        throw new BadRequestException('Both flights must be priced in the same currency');
+        throw new BadRequestException(
+          'Both flights must be priced in the same currency',
+        );
     }
 
-    this.validatePassengers(dto.passengers, out.segment.departureAt);
+    // Every leg's date is checked (review C2).
+    validatePassengers(
+      dto.passengers,
+      [out, back].flatMap((l) => (l ? [l.segment.departureAt] : [])),
+    );
 
     const legs = back ? [out, back] : [out];
     const segments = legs.map((l) => l.segment);
-    const seatCount = dto.passengers.filter((p) => p.type !== PassengerType.INFANT).length;
+    const seatCount = seatCountFor(dto.passengers);
 
     for (const l of legs)
       if (l.availableSeats < seatCount)
-        throw new ConflictException(`Not enough seats on flight ${l.segment.flightNumber}`);
+        throw new ConflictException(
+          `Not enough seats on flight ${l.segment.flightNumber}`,
+        );
 
     const maxExtra = Math.min(...segments.map((s) => s.maxExtraBags));
     if (dto.passengers.some((p) => (p.extraBags ?? 0) > maxExtra))
-      throw new BadRequestException(`Maximum ${maxExtra} extra bag(s) per passenger for this airline`);
+      throw new BadRequestException(
+        `Maximum ${maxExtra} extra bag(s) per passenger for this airline`,
+      );
 
     return this.bookingModel.create({
       userId: new Types.ObjectId(user.id),
@@ -264,14 +260,14 @@ export class FlightBookingsService implements OnModuleInit {
       segments,
       passengers: dto.passengers.map((p) => ({
         ...p,
-        dateOfBirth: new Date(p.dateOfBirth),
+        dateOfBirth: parseDateOfBirth(p.dateOfBirth),
         extraBags: p.extraBags ?? 0,
       })),
       seatCount,
-      status: S.DRAFT,
+      status: FlightBookingStatus.DRAFT,
       draftExpiresAt: new Date(Date.now() + DAY_MS),
       currency: out.currency,
-      ...this.price(segments, dto.passengers),
+      ...calculatePrice(segments, dto.passengers),
     });
   }
 
@@ -279,70 +275,74 @@ export class FlightBookingsService implements OnModuleInit {
   // FLT-22: hold seats for 10 minutes -> PENDING_PAYMENT
   // ---------------------------------------------------------------------------
 
-  async hold(user: AuthUser, bookingId: string) {
-    if (!isValidObjectId(bookingId)) throw new NotFoundException('Draft booking not found');
-    const draft = await this.bookingModel.findOne({ _id: bookingId, userId: user.id, status: S.DRAFT });
+  async hold(user: AuthUser, bookingId: string, acceptPolicies: boolean) {
+    // PAY-02: the airline policies must be accepted before payment (review B2).
+    if (acceptPolicies !== true)
+      throw new BadRequestException(
+        'You must accept the airline baggage and cancellation policies before holding seats',
+      );
+    if (!isValidObjectId(bookingId))
+      throw new NotFoundException('Draft booking not found');
+    const draft = await this.bookingModel.findOne({
+      _id: bookingId,
+      userId: user.id,
+      status: FlightBookingStatus.DRAFT,
+    });
     if (!draft) throw new NotFoundException('Draft booking not found');
 
+    const activeHolds = await this.bookingModel.countDocuments({
+      userId: new Types.ObjectId(user.id),
+      status: FlightBookingStatus.PENDING_PAYMENT,
+      holdExpiresAt: { $gt: new Date() },
+    });
+    if (activeHolds >= MAX_ACTIVE_HOLDS_PER_USER)
+      throw new HttpException(
+        `You already hold seats for ${MAX_ACTIVE_HOLDS_PER_USER} bookings. Pay for one or let a hold expire first.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+
     // The flight may have been cancelled, or the airline deactivated, since the draft
+    const current = [];
     for (const s of draft.segments)
-      await this.loadLeg({ flightId: String(s.flightId), cabinId: String(s.cabinId) });
+      current.push(
+        await this.loadLeg({
+          flightId: String(s.flightId),
+          cabinId: String(s.cabinId),
+        }),
+      );
 
-    // 1. Reserve seats leg by leg. reserveSeats is atomic (check + decrement in one
-    //    MongoDB operation), so concurrent requests can never overbook.
-    const reserved: Segment[] = [];
-    try {
-      for (const s of draft.segments) {
-        await this.flightsService.reserveSeats(String(s.flightId), String(s.cabinId), draft.seatCount);
-        reserved.push(s);
-      }
-    } catch (err) {
-      await this.releaseSegments(reserved, draft.seatCount); // undo the legs already reserved
-      throw err instanceof HttpException ? err : new ConflictException('Not enough seats are available');
+    // Decision (review C4): a draft can be up to 24 hours old, so hold() re-checks the
+    // price and policies. If they changed, the user did not agree to them (FLT-21, PAY-02):
+    // the draft is updated with the new price and policies and the hold is refused, so
+    // the user reviews the new summary and holds again.
+    const segments = current.map((l) => l.segment);
+    if (legsChanged(draft.segments, segments)) {
+      await this.bookingModel.updateOne(
+        { _id: draft._id, status: FlightBookingStatus.DRAFT },
+        { $set: { segments, ...calculatePrice(segments, draft.passengers) } },
+      );
+      throw new ConflictException(
+        'The price or airline policies changed since your booking summary. Review the updated booking and hold again.',
+      );
     }
+    const maxExtra = Math.min(...segments.map((s) => s.maxExtraBags));
+    if (draft.passengers.some((p) => p.extraBags > maxExtra))
+      throw new BadRequestException(
+        `Maximum ${maxExtra} extra bag(s) per passenger for this airline`,
+      );
 
-    // 2. Flip DRAFT -> PENDING_PAYMENT atomically. If two requests race on the
-    //    same draft (double click), only one wins; the loser gives its seats back.
-    const minutes = Number(process.env.FLIGHT_HOLD_MINUTES ?? 10);
-    const held = await this.bookingModel.findOneAndUpdate(
-      { _id: draft._id, status: S.DRAFT },
-      {
-        $set: { status: S.PENDING_PAYMENT, holdExpiresAt: new Date(Date.now() + minutes * 60_000) },
-        $unset: { draftExpiresAt: 1 },
-      },
-      { new: true },
-    );
-    if (!held) {
-      await this.releaseSegments(reserved, draft.seatCount);
-      throw new ConflictException('This booking is already on hold');
-    }
-    return held;
+    return this.seatHolds.holdDraft(draft, this.holdMinutes, new Date());
   }
 
   /** Called every minute by the scheduler. */
-  async expireStaleHolds() {
-    const stale = await this.bookingModel
-      .find({ status: S.PENDING_PAYMENT, holdExpiresAt: { $lte: new Date() } })
-      .select('_id')
-      .lean();
-    for (const { _id } of stale) await this.expireOne(_id);
-    if (stale.length) this.logger.log(`Expired ${stale.length} flight booking hold(s)`);
+  expireStaleHolds() {
+    return this.seatHolds.expireStaleHolds();
   }
 
-  /** For Youssef: expire a pending booking if its hold deadline has passed. */
+  /** For the payments module: expire a pending booking if its hold deadline has passed. */
   async expireIfDue(bookingId: string) {
     if (!isValidObjectId(bookingId)) return;
-    await this.expireOne(new Types.ObjectId(bookingId), false);
-  }
-
-  private async expireOne(id: Types.ObjectId, force = false) {
-    const filter: Record<string, unknown> = { _id: id, status: S.PENDING_PAYMENT };
-    if (!force) filter.holdExpiresAt = { $lte: new Date() };
-    // Flip status FIRST; only the caller that wins the flip releases seats (never twice)
-    const b = await this.bookingModel.findOneAndUpdate(filter, { $set: { status: S.EXPIRED } }, { new: true });
-    if (!b) return;
-    await this.releaseSegments(b.segments, b.seatCount);
-    await this.paymentsService?.cancelPendingPaymentForBooking(BookingType.Flight, b.id as string);
+    await this.seatHolds.expireOne(new Types.ObjectId(bookingId), false);
   }
 
   // ---------------------------------------------------------------------------
@@ -352,8 +352,14 @@ export class FlightBookingsService implements OnModuleInit {
   /** For Youssef: amount to charge. Throws if the booking is not awaiting payment. */
   async getPayableBooking(bookingId: string) {
     const b = await this.findByIdOr404(bookingId);
-    if (b.status !== S.PENDING_PAYMENT || !b.holdExpiresAt || b.holdExpiresAt <= new Date())
-      throw new ConflictException('Booking is not awaiting payment or the hold has expired');
+    if (
+      b.status !== FlightBookingStatus.PENDING_PAYMENT ||
+      !b.holdExpiresAt ||
+      b.holdExpiresAt <= new Date()
+    )
+      throw new ConflictException(
+        'Booking is not awaiting payment or the hold has expired',
+      );
     return {
       id: b.id as string,
       userId: String(b.userId),
@@ -363,8 +369,7 @@ export class FlightBookingsService implements OnModuleInit {
       policyAcceptedAt: b.policyAcceptedAt ?? null,
     };
   }
-
-  /** For Youssef (PAY-02): return provider baggage & cancellation policies stored on the booking. */
+  /** PAY-02: provider baggage & cancellation policies stored on the booking. */
   async getPolicies(user: AuthUser, id: string) {
     const b = await this.findByIdOr404(id);
     if (String(b.userId) !== user.id && user.role !== Role.Admin) {
@@ -399,14 +404,20 @@ export class FlightBookingsService implements OnModuleInit {
     };
   }
 
-  /** For Youssef (PAY-02): record policy acceptance with a timestamp. */
+  /** PAY-02: record policy acceptance with a timestamp (also set when holding seats). */
   async acceptPolicies(user: AuthUser, id: string) {
     const b = await this.findByIdOr404(id);
     if (String(b.userId) !== user.id) {
       throw new ForbiddenException('You do not have access to this booking');
     }
-    if (b.status !== S.PENDING_PAYMENT || !b.holdExpiresAt || b.holdExpiresAt <= new Date()) {
-      throw new ConflictException('Booking is not awaiting payment or the hold has expired');
+    if (
+      b.status !== FlightBookingStatus.PENDING_PAYMENT ||
+      !b.holdExpiresAt ||
+      b.holdExpiresAt <= new Date()
+    ) {
+      throw new ConflictException(
+        'Booking is not awaiting payment or the hold has expired',
+      );
     }
     if (!b.policyAcceptedAt) {
       b.policyAcceptedAt = new Date();
@@ -421,34 +432,54 @@ export class FlightBookingsService implements OnModuleInit {
   }
 
   /**
-   * For Youssef: call after Stripe confirms payment.
-   * Returns the confirmed booking, or null if the hold already expired (then refund).
+   * For Youssef: call after Stripe confirms payment. Safe to call more than once for the
+   * same payment (Stripe may deliver a webhook twice). Review A2, Joumana Hozayen.
+   *
+   * Returns:
+   *  - the booking when it is now CONFIRMED by this payment, including when an earlier
+   *    call with the same paymentId already confirmed it (nothing is changed or re-sent);
+   *  - null only when the booking cannot be confirmed by this payment: it does not exist,
+   *    its hold expired, or it is in another final state (EXPIRED, CANCELLED, or already
+   *    paid by a different payment). Only then should the payment be refunded.
    */
   async confirmAfterPayment(bookingId: string, paymentId: string) {
     if (!isValidObjectId(bookingId)) return null;
     const b = await this.bookingModel.findById(bookingId);
     if (!b) return null;
+    if (b.status !== FlightBookingStatus.PENDING_PAYMENT)
+      return this.alreadyConfirmedBy(b, paymentId);
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      const ref = this.generateReference();
+      const ref = generateBookingReference();
+      // Copy every stored passenger field and add the ticket number, so fields added to
+      // the schema later are not dropped (review D3, Joumana Hozayen).
       const passengers = b.passengers.map((p, i) => ({
-        firstName: p.firstName,
-        lastName: p.lastName,
-        dateOfBirth: p.dateOfBirth,
-        documentNumber: p.documentNumber,
-        type: p.type,
-        email: p.email,
-        phone: p.phone,
-        extraBags: p.extraBags,
+        ...toPlain(p),
         ticketNumber: `${ref}-${String(i + 1).padStart(2, '0')}`,
       }));
       try {
         const confirmed = await this.bookingModel.findOneAndUpdate(
-          { _id: b._id, status: S.PENDING_PAYMENT, holdExpiresAt: { $gt: new Date() } },
-          { $set: { status: S.CONFIRMED, paymentId, confirmedAt: new Date(), bookingReference: ref, passengers } },
+          {
+            _id: b._id,
+            status: FlightBookingStatus.PENDING_PAYMENT,
+            holdExpiresAt: { $gt: new Date() },
+          },
+          {
+            $set: {
+              status: FlightBookingStatus.CONFIRMED,
+              paymentId,
+              confirmedAt: new Date(),
+              bookingReference: ref,
+              passengers,
+            },
+          },
           { new: true },
         );
-        if (!confirmed) return null;
+        if (!confirmed) {
+          // Lost a race: a parallel delivery of the same webhook may have confirmed it.
+          const current = await this.bookingModel.findById(b._id);
+          return current ? this.alreadyConfirmedBy(current, paymentId) : null;
+        }
         await this.notify(
           confirmed.userId,
           NotificationType.BookingStateChanged,
@@ -458,20 +489,43 @@ export class FlightBookingsService implements OnModuleInit {
         );
         return confirmed;
       } catch (e) {
-        if (typeof e === 'object' && e !== null && 'code' in e && e.code === 11000) continue; // duplicate ref
+        if (
+          typeof e === 'object' &&
+          e !== null &&
+          'code' in e &&
+          e.code === 11000
+        )
+          continue; // duplicate ref
         throw e;
       }
     }
-    throw new InternalServerErrorException('Could not generate a booking reference');
+    throw new InternalServerErrorException(
+      'Could not generate a booking reference',
+    );
+  }
+
+  /** The booking if this same payment already confirmed it, otherwise null. */
+  private alreadyConfirmedBy(b: FlightBookingDocument, paymentId: string) {
+    const confirmedStates = [
+      FlightBookingStatus.CONFIRMED,
+      FlightBookingStatus.COMPLETED,
+    ];
+    return confirmedStates.includes(b.status) && b.paymentId === paymentId
+      ? b
+      : null;
   }
 
   /** GEN-11: CONFIRMED -> COMPLETED once the last leg has departed. Called hourly. */
   async completeDeparted() {
     const res = await this.bookingModel.updateMany(
-      { status: S.CONFIRMED, $expr: { $lt: [{ $max: '$segments.departureAt' }, '$$NOW'] } },
-      { $set: { status: S.COMPLETED } },
+      {
+        status: FlightBookingStatus.CONFIRMED,
+        $expr: { $lt: [{ $max: '$segments.departureAt' }, '$$NOW'] },
+      },
+      { $set: { status: FlightBookingStatus.COMPLETED } },
     );
-    if (res.modifiedCount) this.logger.log(`Completed ${res.modifiedCount} flight booking(s)`);
+    if (res.modifiedCount)
+      this.logger.log(`Completed ${res.modifiedCount} flight booking(s)`);
   }
 
   // ---------------------------------------------------------------------------
@@ -479,14 +533,27 @@ export class FlightBookingsService implements OnModuleInit {
   // ---------------------------------------------------------------------------
 
   async listMine(user: AuthUser, q: ListFlightBookingsQueryDto) {
-    const filter: Record<string, unknown> = { userId: new Types.ObjectId(user.id) };
-    if (q.group === 'upcoming') filter.status = { $in: [S.PENDING_PAYMENT, S.CONFIRMED] };
-    else if (q.group === 'past') filter.status = S.COMPLETED;
-    else if (q.group === 'cancelled') filter.status = { $in: [S.CANCELLED, S.EXPIRED] };
-    else filter.status = { $ne: S.DRAFT };
+    const filter: Record<string, unknown> = {
+      userId: new Types.ObjectId(user.id),
+    };
+    if (q.group === 'upcoming')
+      filter.status = {
+        $in: [
+          FlightBookingStatus.PENDING_PAYMENT,
+          FlightBookingStatus.CONFIRMED,
+        ],
+      };
+    else if (q.group === 'past') filter.status = FlightBookingStatus.COMPLETED;
+    else if (q.group === 'cancelled')
+      filter.status = {
+        $in: [FlightBookingStatus.CANCELLED, FlightBookingStatus.EXPIRED],
+      };
+    else filter.status = { $ne: FlightBookingStatus.DRAFT };
 
     const sort: Record<string, 1 | -1> =
-      q.group === 'upcoming' ? { 'segments.0.departureAt': 1 } : { createdAt: -1 };
+      q.group === 'upcoming'
+        ? { 'segments.0.departureAt': 1 }
+        : { createdAt: -1 };
     const [data, total] = await Promise.all([
       this.bookingModel
         .find(filter)
@@ -507,152 +574,174 @@ export class FlightBookingsService implements OnModuleInit {
     const isAirlineMod =
       user.role === Role.AirlineModerator &&
       user.assignedProvider?.type === ProviderType.Airline &&
-      b.segments.some((s) => String(s.airlineId) === user.assignedProvider?.providerId);
+      b.segments.some(
+        (s) => String(s.airlineId) === user.assignedProvider?.providerId,
+      );
 
-    if (b.status === S.DRAFT && !isOwner) throw new NotFoundException('Booking not found');
+    if (b.status === FlightBookingStatus.DRAFT && !isOwner)
+      throw new NotFoundException('Booking not found');
     if (!isOwner && !isAdmin && !isAirlineMod)
       throw new ForbiddenException('You do not have access to this booking');
     return b;
   }
 
+  /**
+   * GET /flight-bookings/:id. The owner sees everything; an admin or the airline's
+   * moderator gets a reduced view without passport numbers, dates of birth, emails or
+   * phones (review C3, Joumana Hozayen).
+   */
+  async viewFor(user: AuthUser, id: string) {
+    const b = await this.findOneFor(user, id);
+    return String(b.userId) === user.id ? b : toRestrictedBookingView(b);
+  }
+
   /** For Habiba (ACC-12): block account deactivation while upcoming bookings exist. */
   async hasUpcomingConfirmedBookings(userId: string) {
-    return !!(await this.bookingModel.exists({ userId: new Types.ObjectId(userId), status: S.CONFIRMED }));
+    return !!(await this.bookingModel.exists({
+      userId: new Types.ObjectId(userId),
+      status: FlightBookingStatus.CONFIRMED,
+    }));
   }
 
   // ---------------------------------------------------------------------------
   // FLT-26: cancellation with refund preview
   // ---------------------------------------------------------------------------
 
-  /**
-   * Refund rule:
-   *  - If the airline has tiers (FLT-09): the highest daysBefore threshold that
-   *    still applies wins; no match = 0%.
-   *  - Otherwise the airline's single policy: non-refundable = 0; inside the
-   *    deadline = 0; else total × refundPercentage − cancellationFee.
-   */
   computeRefund(b: FlightBookingDocument) {
-    const seg = b.segments[0];
-    const msLeft = seg.departureAt.getTime() - Date.now();
-    const daysBeforeDeparture = Math.floor(msLeft / DAY_MS);
-    let refundPercent = 0;
-    let fee = 0;
-    let rule: string;
-
-    if (seg.cancellationTiers?.length) {
-      const tiers = [...seg.cancellationTiers].sort((a, c) => c.daysBefore - a.daysBefore);
-      const tier = tiers.find((t) => daysBeforeDeparture >= t.daysBefore);
-      refundPercent = tier?.refundPercent ?? 0;
-      rule = tier
-        ? `Cancelled ${daysBeforeDeparture} days before departure: ${tier.daysBefore}+ days tier gives ${refundPercent}%`
-        : `Cancelled ${daysBeforeDeparture} days before departure: no tier applies, 0%`;
-    } else if (!seg.refundable) {
-      rule = 'Non-refundable fare';
-    } else if (msLeft < seg.cancellationDeadlineHours * HOUR_MS) {
-      rule = `Cancelled within ${seg.cancellationDeadlineHours} hours of departure: no refund`;
-    } else {
-      refundPercent = seg.refundPercentage;
-      fee = seg.cancellationFee;
-      rule = `${refundPercent}% refund minus ${fee} ${b.currency} cancellation fee`;
-    }
-
-    const refundAmount = Math.max(0, round2((b.totalPrice * refundPercent) / 100 - fee));
-    return { daysBeforeDeparture, refundPercent, cancellationFee: fee, refundAmount, currency: b.currency, rule };
+    return computeRefund(b);
   }
 
   private async getCancellable(user: AuthUser, id: string) {
     const b = await this.findByIdOr404(id);
-    if (String(b.userId) !== user.id) throw new ForbiddenException('You do not have access to this booking');
-    if (b.status !== S.CONFIRMED) throw new ConflictException('Only confirmed bookings can be cancelled');
+    if (String(b.userId) !== user.id)
+      throw new ForbiddenException('You do not have access to this booking');
+    if (b.status !== FlightBookingStatus.CONFIRMED)
+      throw new ConflictException('Only confirmed bookings can be cancelled');
     if (b.segments[0].departureAt.getTime() <= Date.now())
-      throw new ConflictException('Bookings cannot be cancelled after departure');
+      throw new ConflictException(
+        'Bookings cannot be cancelled after departure',
+      );
     return b;
   }
 
   async cancellationQuote(user: AuthUser, id: string) {
-    return this.computeRefund(await this.getCancellable(user, id));
+    return computeRefund(await this.getCancellable(user, id));
   }
 
   async cancel(user: AuthUser, id: string) {
     const b = await this.getCancellable(user, id);
-    const quote = this.computeRefund(b);
+    const quote = computeRefund(b);
 
-    const cancelled = await this.bookingModel.findOneAndUpdate(
-      { _id: b._id, status: S.CONFIRMED },
-      { $set: { status: S.CANCELLED, cancelledAt: new Date(), refundAmount: quote.refundAmount } },
-      { new: true },
-    );
-    if (!cancelled) throw new ConflictException('Booking is no longer confirmed');
+    // Status change and seat release are recorded in one update (review A5).
+    const cancelled = await this.seatHolds.cancelConfirmed(b, {
+      refundAmount: quote.refundAmount,
+      ...(quote.refundAmount > 0 && { refundStatus: RefundStatus.PENDING }),
+    });
+    if (!cancelled)
+      throw new ConflictException('Booking is no longer confirmed');
 
-    await this.releaseSegments(cancelled.segments, cancelled.seatCount);
-    if (quote.refundAmount > 0 && this.refundsService) {
-      const refund = await this.refundsService.processRefundForBooking({
-        bookingType: BookingType.Flight,
-        bookingId: cancelled.id as string,
-        userId: String(cancelled.userId),
-        amount: quote.refundAmount,
-        currency: quote.currency,
-        reason: quote.rule,
-      });
-      if (refund) {
-        cancelled.refundId = String(refund._id);
-        await cancelled.save();
-      }
-    }
+    // The message says "pending"; the payments module sends the final refund outcome (review B3).
     await this.notify(
       cancelled.userId,
       NotificationType.RefundUpdate,
       'Flight booking cancelled',
-      `Booking ${cancelled.bookingReference} was cancelled. Refund: ${quote.refundAmount} ${quote.currency}.`,
+      quote.refundAmount > 0
+        ? `Booking ${cancelled.bookingReference} was cancelled. A refund of ${quote.refundAmount} ${quote.currency} is pending; you will be notified when it is processed.`
+        : `Booking ${cancelled.bookingReference} was cancelled. No refund applies under the airline's cancellation policy.`,
       cancelled.id as string,
     );
+    await this.refundCancelled(cancelled, quote.refundAmount, quote.rule);
     return { booking: cancelled, ...quote };
   }
 
   /**
-   * For Mahmoud's flight cancellation (FLT-06): confirmed bookings are cancelled
-   * with a 100% refund, holds expire and release seats, passengers are notified.
+   * FLT-06: runs when FlightsService.cancel cancels a flight (registered in onModuleInit).
+   * Pending holds expire and release their seats; confirmed bookings are cancelled with a
+   * 100% refund amount and release their seats; every affected passenger is notified.
    */
   async cancelAllForFlight(flightId: string) {
     const affected = await this.bookingModel.find({
       'segments.flightId': new Types.ObjectId(flightId),
-      status: { $in: [S.PENDING_PAYMENT, S.CONFIRMED] },
+      status: {
+        $in: [
+          FlightBookingStatus.PENDING_PAYMENT,
+          FlightBookingStatus.CONFIRMED,
+        ],
+      },
     });
     for (const b of affected) {
-      if (b.status === S.PENDING_PAYMENT) {
-        await this.expireOne(b._id, true);
+      if (b.status === FlightBookingStatus.PENDING_PAYMENT) {
+        await this.seatHolds.expireOne(b._id, true);
+        await this.notify(
+          b.userId,
+          NotificationType.FlightCancelled,
+          'Flight cancelled by the airline',
+          'A flight in your unpaid booking was cancelled, so the booking was released. You were not charged.',
+          b.id as string,
+        );
         continue;
       }
-      const c = await this.bookingModel.findOneAndUpdate(
-        { _id: b._id, status: S.CONFIRMED },
-        { $set: { status: S.CANCELLED, cancelledAt: new Date(), refundAmount: b.totalPrice } },
-        { new: true },
-      );
+      const c = await this.seatHolds.cancelConfirmed(b, {
+        refundAmount: b.totalPrice,
+        refundStatus: RefundStatus.PENDING,
+      });
       if (!c) continue;
-      await this.releaseSegments(c.segments, c.seatCount);
-      if (c.totalPrice > 0 && this.refundsService) {
-        const refund = await this.refundsService.processRefundForBooking({
-          bookingType: BookingType.Flight,
-          bookingId: c.id as string,
-          userId: String(c.userId),
-          amount: c.totalPrice,
-          currency: c.currency,
-          reason: 'Flight cancelled by the airline',
-        });
-        if (refund) {
-          c.refundId = String(refund._id);
-          await c.save();
-        }
-      }
       await this.notify(
         c.userId,
         NotificationType.FlightCancelled,
         'Flight cancelled by the airline',
-        `Your flight was cancelled. Booking ${c.bookingReference} will be fully refunded.`,
+        `Your flight was cancelled. A full refund of ${c.totalPrice} ${c.currency} for booking ${c.bookingReference} is pending; you will be notified when it is processed.`,
         c.id as string,
+      );
+      await this.refundCancelled(
+        c,
+        c.totalPrice,
+        'Flight cancelled by the airline',
       );
     }
     return { affected: affected.length };
+  }
+
+  /**
+   * PAY-03: asks the payments module for the Stripe refund of a cancelled booking and
+   * stores its id and outcome (REFUNDED or FAILED) on the booking. The payments module
+   * notifies the user of the outcome. If it finds no Stripe payment for the booking, or
+   * fails unexpectedly, refundStatus stays PENDING so an admin can follow up.
+   * Review B3, Joumana Hozayen.
+   */
+  private async refundCancelled(
+    booking: FlightBookingDocument,
+    amount: number,
+    reason: string,
+  ) {
+    if (amount <= 0 || !this.refundsService) return;
+    try {
+      const refund = await this.refundsService.processRefundForBooking({
+        bookingType: BookingType.Flight,
+        bookingId: booking.id as string,
+        userId: String(booking.userId),
+        amount,
+        currency: booking.currency,
+        reason,
+      });
+      if (!refund) return;
+      const refundStatus =
+        refund.status === PaymentRefundStatus.Succeeded
+          ? RefundStatus.REFUNDED
+          : refund.status === PaymentRefundStatus.Failed
+            ? RefundStatus.FAILED
+            : RefundStatus.PENDING;
+      await this.bookingModel.updateOne(
+        { _id: booking._id },
+        { $set: { refundId: String(refund._id), refundStatus } },
+      );
+      booking.refundId = String(refund._id);
+      booking.refundStatus = refundStatus;
+    } catch (e) {
+      this.logger.error(
+        `Refund for flight booking ${String(booking._id)} could not be created: ${String(e)}`,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -661,8 +750,13 @@ export class FlightBookingsService implements OnModuleInit {
 
   async eTicketBooking(user: AuthUser, id: string) {
     const b = await this.findOneFor(user, id);
-    if (b.status !== S.CONFIRMED && b.status !== S.COMPLETED)
-      throw new ConflictException('The e-ticket is only available for confirmed bookings');
+    if (
+      b.status !== FlightBookingStatus.CONFIRMED &&
+      b.status !== FlightBookingStatus.COMPLETED
+    )
+      throw new ConflictException(
+        'The e-ticket is only available for confirmed bookings',
+      );
     return b;
   }
 }

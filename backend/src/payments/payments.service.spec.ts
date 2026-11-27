@@ -1,11 +1,19 @@
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Role } from '../common/enums/index.js';
 import { BookingGatewayRegistry } from './booking-gateway.registry.js';
 import type { BookingPaymentGateway } from './booking-gateway.registry.js';
-import { BookingType, PaymentStatus, RefundStatus } from './enums/payment.enums.js';
+import {
+  BookingType,
+  PaymentStatus,
+  RefundStatus,
+} from './enums/payment.enums.js';
 import { PaymentsService } from './payments.service.js';
 import { RefundsService } from './refunds.service.js';
 
@@ -16,15 +24,29 @@ const PAYMENT_ID = new Types.ObjectId();
 const REFUND_ID = new Types.ObjectId();
 
 const user = { id: USER_ID, email: 'yusuf@example.com', role: Role.User };
-const otherUser = { id: OTHER_USER_ID, email: 'other@example.com', role: Role.User };
-const adminUser = { id: OTHER_USER_ID, email: 'admin@example.com', role: Role.Admin };
+const otherUser = {
+  id: OTHER_USER_ID,
+  email: 'other@example.com',
+  role: Role.User,
+};
+const adminUser = {
+  id: OTHER_USER_ID,
+  email: 'admin@example.com',
+  role: Role.Admin,
+};
 
 describe('PaymentsService & RefundsService', () => {
   let paymentsService: PaymentsService;
   let refundsService: RefundsService;
   let gatewayRegistry: BookingGatewayRegistry;
-  let flightGateway: BookingPaymentGateway & Record<string, ReturnType<typeof vi.fn>>;
-  let hotelGateway: BookingPaymentGateway & Record<string, ReturnType<typeof vi.fn>>;
+  let flightGateway: Record<
+    keyof BookingPaymentGateway,
+    ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  >;
+  let hotelGateway: Record<
+    keyof BookingPaymentGateway,
+    ReturnType<typeof vi.fn<(...args: any[]) => any>>
+  >;
   let flightConfirmAfterPaymentMock: ReturnType<typeof vi.fn>;
   let hotelExpireIfDueMock: ReturnType<typeof vi.fn>;
   let paymentModel: any;
@@ -103,7 +125,9 @@ describe('PaymentsService & RefundsService', () => {
 
     stripeMock = {
       paymentIntents: {
-        create: vi.fn().mockResolvedValue({ id: 'pi_123', client_secret: 'cs_123' }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ id: 'pi_123', client_secret: 'cs_123' }),
         cancel: vi.fn().mockResolvedValue({ id: 'pi_123', status: 'canceled' }),
       },
       refunds: {
@@ -140,7 +164,10 @@ describe('PaymentsService & RefundsService', () => {
     });
 
     await expect(
-      paymentsService.createPayment(user, { bookingType: BookingType.Flight, bookingId: BOOKING_ID }),
+      paymentsService.createPayment(user, {
+        bookingType: BookingType.Flight,
+        bookingId: BOOKING_ID,
+      }),
     ).rejects.toThrow(ConflictException);
   });
 
@@ -187,9 +214,15 @@ describe('PaymentsService & RefundsService', () => {
       holdExpiresAt: new Date(Date.now() + 60_000),
       policyAcceptedAt: new Date(),
     });
-    stripeMock.paymentIntents.create.mockResolvedValue({ id: 'pi_new', client_secret: 'cs_new' });
+    stripeMock.paymentIntents.create.mockResolvedValue({
+      id: 'pi_new',
+      client_secret: 'cs_new',
+    });
 
-    const res = await paymentsService.retryPayment(user, PAYMENT_ID.toHexString());
+    const res = await paymentsService.retryPayment(
+      user,
+      PAYMENT_ID.toHexString(),
+    );
     expect(stripeMock.paymentIntents.cancel).toHaveBeenCalledWith('pi_old');
     expect(res.stripePaymentIntentId).toBe('pi_new');
     expect(res.attemptCount).toBe(2);
@@ -198,12 +231,15 @@ describe('PaymentsService & RefundsService', () => {
 
   it('PAY-01: enforces ownership/admin on getPayment', async () => {
     paymentModel.findById.mockReturnValue({
-      lean: vi.fn().mockResolvedValue({ _id: PAYMENT_ID, userId: new Types.ObjectId(USER_ID) }),
+      lean: vi.fn().mockResolvedValue({
+        _id: PAYMENT_ID,
+        userId: new Types.ObjectId(USER_ID),
+      }),
     });
 
-    await expect(paymentsService.getPayment(otherUser, PAYMENT_ID.toHexString())).rejects.toThrow(
-      ForbiddenException,
-    );
+    await expect(
+      paymentsService.getPayment(otherUser, PAYMENT_ID.toHexString()),
+    ).rejects.toThrow(ForbiddenException);
     await expect(
       paymentsService.getPayment(adminUser, PAYMENT_ID.toHexString()),
     ).resolves.toBeDefined();
@@ -214,9 +250,9 @@ describe('PaymentsService & RefundsService', () => {
       throw new Error('Bad signature');
     });
 
-    await expect(paymentsService.handleWebhook(Buffer.from('{}'), 'sig_bad')).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      paymentsService.handleWebhook(Buffer.from('{}'), 'sig_bad'),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('PAY-01: confirms flight booking on payment_intent.succeeded webhook', async () => {
@@ -237,8 +273,14 @@ describe('PaymentsService & RefundsService', () => {
     });
     flightConfirmAfterPaymentMock.mockResolvedValue(true);
 
-    const res = await paymentsService.handleWebhook(Buffer.from('{}'), 'sig_ok');
-    expect(res).toEqual({ received: true, eventType: 'payment_intent.succeeded' });
+    const res = await paymentsService.handleWebhook(
+      Buffer.from('{}'),
+      'sig_ok',
+    );
+    expect(res).toEqual({
+      received: true,
+      eventType: 'payment_intent.succeeded',
+    });
     expect(flightConfirmAfterPaymentMock).toHaveBeenCalledWith(
       BOOKING_ID,
       PAYMENT_ID.toHexString(),
@@ -260,7 +302,12 @@ describe('PaymentsService & RefundsService', () => {
     });
     stripeMock.webhooks.constructEvent.mockReturnValue({
       type: 'payment_intent.payment_failed',
-      data: { object: { id: 'pi_123', last_payment_error: { message: 'Card declined' } } },
+      data: {
+        object: {
+          id: 'pi_123',
+          last_payment_error: { message: 'Card declined' },
+        },
+      },
     });
 
     await paymentsService.handleWebhook(Buffer.from('{}'), 'sig_ok');

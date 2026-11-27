@@ -1,7 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { HydratedDocument } from 'mongoose';
-import { FlightBookingStatus, PassengerType } from '../flight-booking.enums.js';
+import {
+  FlightBookingStatus,
+  PassengerType,
+  RefundStatus,
+} from '../flight-booking.enums.js';
 
 @Schema({ _id: false })
 export class CancellationTier {
@@ -16,7 +20,8 @@ export class Passenger {
   @Prop({ required: true, trim: true }) lastName: string;
   @Prop({ required: true }) dateOfBirth: Date;
   @Prop({ required: true, trim: true }) documentNumber: string;
-  @Prop({ type: String, enum: PassengerType, required: true }) type: PassengerType;
+  @Prop({ type: String, enum: PassengerType, required: true })
+  type: PassengerType;
   @Prop() email?: string;
   @Prop() phone?: string;
   @Prop({ default: 0, min: 0 }) extraBags: number;
@@ -30,12 +35,16 @@ const PassengerSchema = SchemaFactory.createForClass(Passenger);
  */
 @Schema({ _id: false })
 export class Segment {
-  @Prop({ type: Types.ObjectId, ref: 'Flight', required: true }) flightId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Flight', required: true })
+  flightId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, required: true }) cabinId: Types.ObjectId;
-  @Prop({ type: Types.ObjectId, ref: 'Airline', required: true }) airlineId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Airline', required: true })
+  airlineId: Types.ObjectId;
   @Prop({ required: true }) flightNumber: string;
-  @Prop({ type: Types.ObjectId, required: true }) departureAirportId: Types.ObjectId;
-  @Prop({ type: Types.ObjectId, required: true }) arrivalAirportId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true })
+  departureAirportId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true })
+  arrivalAirportId: Types.ObjectId;
   @Prop({ required: true }) departureAt: Date;
   @Prop({ required: true }) arrivalAt: Date;
   @Prop({ required: true }) cabinClass: string;
@@ -49,13 +58,29 @@ export class Segment {
 
   // Cancellation snapshot: tiers (FLT-09) if the airline has them,
   // otherwise the airline's single-rule policy.
-  @Prop({ type: [CancellationTierSchema], default: [] }) cancellationTiers: CancellationTier[];
+  @Prop({ type: [CancellationTierSchema], default: [] })
+  cancellationTiers: CancellationTier[];
   @Prop({ default: false }) refundable: boolean;
   @Prop({ default: 0 }) refundPercentage: number;
   @Prop({ default: 0 }) cancellationFee: number;
   @Prop({ default: 0 }) cancellationDeadlineHours: number;
 }
 const SegmentSchema = SchemaFactory.createForClass(Segment);
+
+/**
+ * Seats that still have to be given back to a flight cabin. Written in the same update
+ * that expires or cancels a booking, and removed one by one once released, so a failed
+ * release is retried by the scheduler instead of being lost (review A5, Joumana Hozayen).
+ */
+@Schema()
+export class PendingSeatRelease {
+  declare _id: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true }) flightId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, required: true }) cabinId: Types.ObjectId;
+  @Prop({ required: true, min: 1 }) count: number;
+}
+const PendingSeatReleaseSchema =
+  SchemaFactory.createForClass(PendingSeatRelease);
 
 @Schema({ timestamps: true })
 export class FlightBooking {
@@ -73,7 +98,12 @@ export class FlightBooking {
   @Prop({ type: [PassengerSchema], required: true }) passengers: Passenger[];
   @Prop({ required: true, min: 1 }) seatCount: number; // adults + children (infants take no seat)
 
-  @Prop({ type: String, enum: FlightBookingStatus, default: FlightBookingStatus.DRAFT, index: true })
+  @Prop({
+    type: String,
+    enum: FlightBookingStatus,
+    default: FlightBookingStatus.DRAFT,
+    index: true,
+  })
   status: FlightBookingStatus;
 
   @Prop() draftExpiresAt?: Date;
@@ -85,12 +115,18 @@ export class FlightBooking {
   @Prop({ required: true }) currency: string;
 
   @Prop({ unique: true, sparse: true }) bookingReference?: string;
+  // PAY-02: when the user accepted the airline policies (review B2, Joumana Hozayen).
   @Prop() policyAcceptedAt?: Date;
   @Prop() paymentId?: string;
   @Prop() confirmedAt?: Date;
   @Prop() cancelledAt?: Date;
   @Prop() refundAmount?: number;
   @Prop() refundId?: string;
+  // PAY-03: PENDING until the payment module confirms the Stripe refund (review B3, Joumana Hozayen).
+  @Prop({ type: String, enum: RefundStatus }) refundStatus?: RefundStatus;
+
+  @Prop({ type: [PendingSeatReleaseSchema], default: [] })
+  pendingSeatReleases: PendingSeatRelease[];
 
   // Set by Mongoose because of timestamps: true
   createdAt?: Date;

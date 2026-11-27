@@ -203,3 +203,32 @@ Step-by-step guidance to implement Stripe test-mode payments, webhook verificati
 How the output was used:
 Implemented Payment and Refund schemas, BookingPoliciesController, PaymentsController, RefundsController, AdminBookingsController, booking service integrations, and unit tests.
 ================================================
+
+
+
+Date: 2026-11-27
+Student: Joumana Hozayen
+Tool: Claude
+Related Requirement: FLT-06, FLT-08, FLT-09, FLT-12, FLT-19, FLT-21, FLT-22, FLT-23, FLT-25, FLT-26, FLT-29, FLT-30, PAY-01, PAY-02, PAY-03, ACC-11, ACC-12, GEN-05
+Prompt:
+Gave Claude the code review of the flight booking module (items A1 to D3) and
+asked it to fix every item on a branch from develop (e1a206e), with the smallest
+change per item, one commit per fix, a unit test for each fix, a deliberate
+break of each fix to check that a test fails, and no payment code until the
+payments module is merged.
+How the output was used:
+Claude made 20 commits: pdfkit dependency, service split (D1), cleanups (D3),
+airline bag price/limit and refund tiers (A1), idempotent payment confirmation
+(A2), seat-release retry queue (A5), flight cancellation hook (A3), moderator
+booking list and CSV (A4), deactivation check (B1), policy acceptance (B2),
+refund status (B3), strict date of birth (C1), per-leg passenger checks and
+duplicate passports (C2), reduced views for admins/moderators (C3), draft and
+hold limits with a price re-check (C4), hold-minutes validation (C5), page size
+10 (C6), Departed flight status (C7), typed Airport model (D2) and extra tests
+(A7). When the payments module was merged into develop, Claude merged develop
+into the branch, moved the payments calls into the new structure, connected the
+refund status to the real Stripe refunds, removed dev-confirm (A6), and fixed
+admin.module.ts, which develop had left with conflict markers. tsc, the full
+Vitest suite, nest build and prettier --check on the touched files passed in
+Claude's environment, and each fix was broken on purpose to see a test fail.
+I reviewed the commits before applying them.

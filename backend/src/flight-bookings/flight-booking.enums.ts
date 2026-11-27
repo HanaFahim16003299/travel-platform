@@ -12,3 +12,10 @@ export enum PassengerType {
   CHILD = 'CHILD',
   INFANT = 'INFANT',
 }
+
+/** PAY-03: state of the refund of a cancelled booking (review B3, Joumana Hozayen). */
+export enum RefundStatus {
+  PENDING = 'PENDING',
+  REFUNDED = 'REFUNDED',
+  FAILED = 'FAILED',
+}
