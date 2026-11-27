@@ -344,3 +344,61 @@ admin.module.ts, which develop had left with conflict markers. tsc, the full
 Vitest suite, nest build and prettier --check on the touched files passed in
 Claude's environment, and each fix was broken on purpose to see a test fail.
 I reviewed the commits before applying them.
+
+
+Date: 2026-11-26
+Student: Hana Fahim
+Tool: Claude (Anthropic), chat with file, shell and test tools
+Related Requirement: GEN-12, GEN-05, GEN-08
+Prompt:
+Asked Claude to review my draft of the shared reference-data work and complete
+it: public read endpoints for countries, currencies, cities, airports (list and
+by id) and attractions, with search, filters, sorting and page size 10, plus a
+shared service other modules can call (airportsExist, cityExists,
+countryExists, isSupportedCurrency). Also asked it to restrict uploaded images
+to JPG and PNG at 5 MB (GEN-08) and to document the API conventions in
+docs/api/conventions.md.
+How the output was used:
+Reviewed the code and ran it against my own database. The startup log showed
+the new routes and "Reference data ready: 8 countries, 8 cities, 8 airports,
+8 attractions". Removed WebP from the allowed image types and updated the blog
+upload filter message. Checked that tsc and the full Vitest suite passed
+before opening the pull request myself.
+
+Date: 2026-11-26
+Student: Hana Fahim
+Tool: Claude (Anthropic), chat with file, shell and test tools
+Related Requirement: ACC-18, ACC-06, GEN-06, GEN-07
+Prompt:
+Asked Claude to add the missing shared pieces of my part: an admin account that
+is created at startup from ADMIN_EMAIL and ADMIN_PASSWORD (never overwriting an
+existing user, skipping weak passwords), a paginated and filterable
+GET /api/admin/audit-logs for admins, and the notification endpoints (list with
+unread filter and unread count, mark one as read, mark all as read) for the
+signed-in user. Also asked it to change the session setting in .env.example to
+JWT_EXPIRES_MINUTES=30.
+How the output was used:
+Reviewed the generated services, controllers and DTOs and kept the existing
+error format and pagination shape. Added unit tests for the admin seed, with
+the user schema mocked. Started the application, saw "Admin account created"
+in the log, logged in as the admin in Swagger and called the audit-log and
+notification endpoints. No secrets were written to Git; the admin password
+stays only in my local .env.
+
+Date: 2026-11-27
+Student: Hana Fahim
+Tool: Claude (Anthropic), chat with file, shell and test tools
+Related Requirement: ACC-17, ACC-18, PAY-01, GEN-12
+Prompt:
+Asked Claude to check the merged develop branch after the payments, flight
+booking and hotel pull requests, to find anything that stopped the build, and
+to explain how to run the whole flow (admin creates a hotel and a moderator,
+moderator adds a room, user books, pays with a Stripe test card, and the refund).
+How the output was used:
+Claude found that admin.module.ts on develop still contained conflict text
+twice, so the application could not compile, and that pdfkit was missing from
+package.json. I merged the fixes through pull requests (pdfkit, then the second
+admin.module.ts fix), pulled develop, and restarted the backend until the
+payments routes appeared in Swagger. I set up Stripe test keys and the Stripe
+CLI webhook locally and followed the step-by-step Swagger test. I did not
+commit any keys.
