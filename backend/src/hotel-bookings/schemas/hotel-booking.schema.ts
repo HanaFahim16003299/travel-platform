@@ -96,6 +96,10 @@ export class HotelBooking {
   })
   currency: string;
 
+  // Unique booking reference (HTL-17)
+  @Prop({ unique: true, sparse: true })
+  bookingReference?: string;
+
   // Booking status
   @Prop({
     type: String,
@@ -136,12 +140,6 @@ export class HotelBooking {
   @Prop({ type: Date, default: null })
   confirmedAt: Date | null;
 
-  // Added by Mohamed Hesham: unique code shown to the user once the booking is confirmed (HTL-17).
-  // sparse: bookings that are not confirmed yet have no code, and the
-  // unique rule must ignore them.
-  @Prop({ type: String, unique: true, sparse: true })
-  bookingReference?: string;
-
   // Cancellation timestamp
 @Prop({ type: Date, default: null })
 cancelledAt: Date | null;
@@ -157,7 +155,7 @@ refundPercent: number;
 // Refund status
 @Prop({
   type: String,
-  enum: ['Not Required', 'Pending', 'Processed', 'Failed'],
+  enum: ['Not Required', 'Pending', 'Processed', 'Refunded', 'Failed'],
   default: 'Not Required',
 })
 refundStatus: string;

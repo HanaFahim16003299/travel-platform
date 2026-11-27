@@ -9,8 +9,15 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { BookingGatewayRegistry } from '../payments/booking-gateway.registry.js';
+import {
+  BookingType,
+  RefundStatus as PaymentRefundStatus,
+} from '../payments/enums/payment.enums.js';
+import { RefundsService } from '../payments/refunds.service.js';
 import { isValidObjectId, Model, Types } from 'mongoose';
 import type { AuthUser } from '../auth/decorators.js';
 import { ProviderType, Role } from '../common/enums/index.js';
@@ -81,12 +88,23 @@ export class FlightBookingsService implements OnModuleInit {
     private readonly seatHolds: SeatHoldService,
     private readonly notifications: NotificationsService,
     private readonly flightCancellations: FlightCancellationHooks,
+    @Optional() private readonly refundsService?: RefundsService,
+    @Optional() private readonly gatewayRegistry?: BookingGatewayRegistry,
   ) {}
 
-  /** FLT-06: when an airline cancels a flight, cancel its bookings (review A3, Joumana Hozayen). */
   onModuleInit() {
+    // FLT-06: when an airline cancels a flight, cancel its bookings (review A3, Joumana Hozayen).
     this.flightCancellations.register({
       onFlightCancelled: (flightId) => this.cancelAllForFlight(flightId),
+    });
+    // PAY-01/PAY-02: the payments module reaches flight bookings through this gateway.
+    this.gatewayRegistry?.register(BookingType.Flight, {
+      getPolicies: (user, id) => this.getPolicies(user, id),
+      acceptPolicies: (user, id) => this.acceptPolicies(user, id),
+      getPayableBooking: (id) => this.getPayableBooking(id),
+      confirmAfterPayment: async (id, paymentId) =>
+        (await this.confirmAfterPayment(id, paymentId)) !== null,
+      expireIfDue: (id) => this.expireIfDue(id),
     });
   }
 
@@ -321,6 +339,12 @@ export class FlightBookingsService implements OnModuleInit {
     return this.seatHolds.expireStaleHolds();
   }
 
+  /** For the payments module: expire a pending booking if its hold deadline has passed. */
+  async expireIfDue(bookingId: string) {
+    if (!isValidObjectId(bookingId)) return;
+    await this.seatHolds.expireOne(new Types.ObjectId(bookingId), false);
+  }
+
   // ---------------------------------------------------------------------------
   // FLT-23: confirmation after payment (Youssef's webhook calls these)
   // ---------------------------------------------------------------------------
@@ -343,6 +367,67 @@ export class FlightBookingsService implements OnModuleInit {
       currency: b.currency,
       holdExpiresAt: b.holdExpiresAt,
       policyAcceptedAt: b.policyAcceptedAt ?? null,
+    };
+  }
+  /** PAY-02: provider baggage & cancellation policies stored on the booking. */
+  async getPolicies(user: AuthUser, id: string) {
+    const b = await this.findByIdOr404(id);
+    if (String(b.userId) !== user.id && user.role !== Role.Admin) {
+      throw new ForbiddenException('You do not have access to this booking');
+    }
+    return {
+      bookingType: 'flight',
+      bookingId: b.id as string,
+      status: b.status,
+      totalPrice: b.totalPrice,
+      currency: b.currency,
+      policyAcceptedAt: b.policyAcceptedAt ?? null,
+      segments: b.segments.map((seg) => ({
+        flightId: String(seg.flightId),
+        airlineId: String(seg.airlineId),
+        flightNumber: seg.flightNumber,
+        cabinClass: seg.cabinClass,
+        baggagePolicy: {
+          freeCheckedBags: seg.freeCheckedBags,
+          checkedBagWeightKg: seg.checkedBagWeightKg ?? null,
+          extraBagPrice: seg.extraBagPrice,
+          maxExtraBags: seg.maxExtraBags,
+        },
+        cancellationPolicy: {
+          cancellationTiers: seg.cancellationTiers,
+          refundable: seg.refundable,
+          refundPercentage: seg.refundPercentage,
+          cancellationFee: seg.cancellationFee,
+          cancellationDeadlineHours: seg.cancellationDeadlineHours,
+        },
+      })),
+    };
+  }
+
+  /** PAY-02: record policy acceptance with a timestamp (also set when holding seats). */
+  async acceptPolicies(user: AuthUser, id: string) {
+    const b = await this.findByIdOr404(id);
+    if (String(b.userId) !== user.id) {
+      throw new ForbiddenException('You do not have access to this booking');
+    }
+    if (
+      b.status !== FlightBookingStatus.PENDING_PAYMENT ||
+      !b.holdExpiresAt ||
+      b.holdExpiresAt <= new Date()
+    ) {
+      throw new ConflictException(
+        'Booking is not awaiting payment or the hold has expired',
+      );
+    }
+    if (!b.policyAcceptedAt) {
+      b.policyAcceptedAt = new Date();
+      await b.save();
+    }
+    return {
+      bookingType: 'flight',
+      bookingId: b.id as string,
+      accepted: true,
+      policyAcceptedAt: b.policyAcceptedAt,
     };
   }
 
@@ -555,9 +640,7 @@ export class FlightBookingsService implements OnModuleInit {
     if (!cancelled)
       throw new ConflictException('Booking is no longer confirmed');
 
-    // TODO (PAY-03, Youssef's payments module): when quote.refundAmount > 0, create the
-    // Stripe refund here and report it back through recordRefund().
-    // The message says "pending" until the refund really exists (review B3).
+    // The message says "pending"; the payments module sends the final refund outcome (review B3).
     await this.notify(
       cancelled.userId,
       NotificationType.RefundUpdate,
@@ -567,6 +650,7 @@ export class FlightBookingsService implements OnModuleInit {
         : `Booking ${cancelled.bookingReference} was cancelled. No refund applies under the airline's cancellation policy.`,
       cancelled.id as string,
     );
+    await this.refundCancelled(cancelled, quote.refundAmount, quote.rule);
     return { booking: cancelled, ...quote };
   }
 
@@ -602,8 +686,6 @@ export class FlightBookingsService implements OnModuleInit {
         refundStatus: RefundStatus.PENDING,
       });
       if (!c) continue;
-      // TODO (PAY-03, Youssef's payments module): create the Stripe refund for the full
-      // c.totalPrice here and report it back through recordRefund().
       await this.notify(
         c.userId,
         NotificationType.FlightCancelled,
@@ -611,40 +693,55 @@ export class FlightBookingsService implements OnModuleInit {
         `Your flight was cancelled. A full refund of ${c.totalPrice} ${c.currency} for booking ${c.bookingReference} is pending; you will be notified when it is processed.`,
         c.id as string,
       );
+      await this.refundCancelled(
+        c,
+        c.totalPrice,
+        'Flight cancelled by the airline',
+      );
     }
     return { affected: affected.length };
   }
 
   /**
-   * PAY-03 hook for the payment module: records the Stripe refund of a cancelled booking
-   * and tells the user once it is REFUNDED or FAILED. Review B3, Joumana Hozayen.
+   * PAY-03: asks the payments module for the Stripe refund of a cancelled booking and
+   * stores its id and outcome (REFUNDED or FAILED) on the booking. The payments module
+   * notifies the user of the outcome. If it finds no Stripe payment for the booking, or
+   * fails unexpectedly, refundStatus stays PENDING so an admin can follow up.
+   * Review B3, Joumana Hozayen.
    */
-  async recordRefund(
-    bookingId: string,
-    refundId: string,
-    refundStatus: RefundStatus,
+  private async refundCancelled(
+    booking: FlightBookingDocument,
+    amount: number,
+    reason: string,
   ) {
-    if (!isValidObjectId(bookingId))
-      throw new NotFoundException('Cancelled booking not found');
-    const b = await this.bookingModel.findOneAndUpdate(
-      { _id: bookingId, status: FlightBookingStatus.CANCELLED },
-      { $set: { refundId, refundStatus } },
-      { new: true },
-    );
-    if (!b) throw new NotFoundException('Cancelled booking not found');
-    if (refundStatus !== RefundStatus.PENDING)
-      await this.notify(
-        b.userId,
-        NotificationType.RefundUpdate,
-        refundStatus === RefundStatus.REFUNDED
-          ? 'Refund processed'
-          : 'Refund failed',
-        refundStatus === RefundStatus.REFUNDED
-          ? `Your refund of ${b.refundAmount} ${b.currency} for booking ${b.bookingReference} was processed.`
-          : `The refund for booking ${b.bookingReference} failed. Please contact support.`,
-        b.id as string,
+    if (amount <= 0 || !this.refundsService) return;
+    try {
+      const refund = await this.refundsService.processRefundForBooking({
+        bookingType: BookingType.Flight,
+        bookingId: booking.id as string,
+        userId: String(booking.userId),
+        amount,
+        currency: booking.currency,
+        reason,
+      });
+      if (!refund) return;
+      const refundStatus =
+        refund.status === PaymentRefundStatus.Succeeded
+          ? RefundStatus.REFUNDED
+          : refund.status === PaymentRefundStatus.Failed
+            ? RefundStatus.FAILED
+            : RefundStatus.PENDING;
+      await this.bookingModel.updateOne(
+        { _id: booking._id },
+        { $set: { refundId: String(refund._id), refundStatus } },
       );
-    return b;
+      booking.refundId = String(refund._id);
+      booking.refundStatus = refundStatus;
+    } catch (e) {
+      this.logger.error(
+        `Refund for flight booking ${String(booking._id)} could not be created: ${String(e)}`,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------

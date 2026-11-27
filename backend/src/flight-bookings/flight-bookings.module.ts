@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { FlightsModule } from '../flights/flights.module.js';
+import { PaymentsModule } from '../payments/payments.module.js';
 import { FlightBookingsController } from './flight-bookings.controller.js';
 import { FlightBookingsService } from './flight-bookings.service.js';
 import { FlightBookingsScheduler } from './flight-bookings.scheduler.js';
@@ -25,6 +26,7 @@ import {
     // Gives us FlightsService.reserveSeats plus the Flight and Airline models.
     // NotificationsModule and AuthModule are @Global, so no import is needed for them.
     FlightsModule,
+    PaymentsModule,
   ],
   controllers: [FlightBookingsController],
   providers: [

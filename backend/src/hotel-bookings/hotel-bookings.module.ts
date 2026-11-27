@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { PaymentsModule } from '../payments/payments.module.js';
 
 import {
   HotelBooking,
@@ -19,6 +20,7 @@ import { HotelReservationsService } from './reservations/hotel-reservations.serv
 @Module({
   imports: [
     HotelsModule,
+    PaymentsModule,
 
     MongooseModule.forFeature([
       {

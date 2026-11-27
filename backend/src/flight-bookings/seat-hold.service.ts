@@ -5,10 +5,13 @@ import {
   HttpException,
   Injectable,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { FlightsService } from '../flights/flights.service.js';
+import { BookingType } from '../payments/enums/payment.enums.js';
+import { PaymentsService } from '../payments/payments.service.js';
 import { Flight } from '../flights/schemas/flight.schema.js';
 import type { FlightDocument } from '../flights/schemas/flight.schema.js';
 import { FlightBooking, Segment } from './schemas/flight-booking.schema.js';
@@ -46,6 +49,7 @@ export class SeatHoldService {
     @InjectModel(Flight.name)
     private readonly flightModel: Model<FlightDocument>,
     private readonly flightsService: FlightsService,
+    @Optional() private readonly paymentsService?: PaymentsService,
   ) {}
 
   /**
@@ -237,7 +241,14 @@ export class SeatHoldService {
     });
     if (!expired) return;
     await this.processPendingReleases(id);
-    // TODO (when Youssef's PaymentsService exists): cancel the Stripe PaymentIntent (PAY-01)
+    // PAY-01: the unpaid Stripe PaymentIntent of an expired hold is cancelled.
+    await this.paymentsService
+      ?.cancelPendingPaymentForBooking(BookingType.Flight, String(id))
+      .catch((e: unknown) =>
+        this.logger.error(
+          `Could not cancel the payment of expired booking ${String(id)}: ${String(e)}`,
+        ),
+      );
   }
 
   /**
