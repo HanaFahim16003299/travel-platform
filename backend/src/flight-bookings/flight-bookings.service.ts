@@ -22,7 +22,7 @@ import { Airline } from '../airlines/schemas/airline.schema.js';
 import type { AirlineDocument } from '../airlines/schemas/airline.schema.js';
 import { FlightBooking, Segment } from './schemas/flight-booking.schema.js';
 import type { FlightBookingDocument } from './schemas/flight-booking.schema.js';
-import { FlightBookingStatus } from './flight-booking.enums.js';
+import { FlightBookingStatus, RefundStatus } from './flight-booking.enums.js';
 import {
   CreateFlightBookingDto,
   SegmentSelectionDto,
@@ -477,17 +477,21 @@ export class FlightBookingsService implements OnModuleInit {
     // Status change and seat release are recorded in one update (review A5).
     const cancelled = await this.seatHolds.cancelConfirmed(b, {
       refundAmount: quote.refundAmount,
+      ...(quote.refundAmount > 0 && { refundStatus: RefundStatus.PENDING }),
     });
     if (!cancelled)
       throw new ConflictException('Booking is no longer confirmed');
 
-    // TODO (when Youssef's PaymentsService exists): if quote.refundAmount > 0, create the
-    // Stripe refund and save its id in cancelled.refundId (PAY-03).
+    // TODO (PAY-03, Youssef's payments module): when quote.refundAmount > 0, create the
+    // Stripe refund here and report it back through recordRefund().
+    // The message says "pending" until the refund really exists (review B3).
     await this.notify(
       cancelled.userId,
       NotificationType.RefundUpdate,
       'Flight booking cancelled',
-      `Booking ${cancelled.bookingReference} was cancelled. Refund: ${quote.refundAmount} ${quote.currency}.`,
+      quote.refundAmount > 0
+        ? `Booking ${cancelled.bookingReference} was cancelled. A refund of ${quote.refundAmount} ${quote.currency} is pending; you will be notified when it is processed.`
+        : `Booking ${cancelled.bookingReference} was cancelled. No refund applies under the airline's cancellation policy.`,
       cancelled.id as string,
     );
     return { booking: cancelled, ...quote };
@@ -522,19 +526,52 @@ export class FlightBookingsService implements OnModuleInit {
       }
       const c = await this.seatHolds.cancelConfirmed(b, {
         refundAmount: b.totalPrice,
+        refundStatus: RefundStatus.PENDING,
       });
       if (!c) continue;
       // TODO (PAY-03, Youssef's payments module): create the Stripe refund for the full
-      // c.totalPrice here and store its id in refundId.
+      // c.totalPrice here and report it back through recordRefund().
       await this.notify(
         c.userId,
         NotificationType.FlightCancelled,
         'Flight cancelled by the airline',
-        `Your flight was cancelled. Booking ${c.bookingReference} will be fully refunded.`,
+        `Your flight was cancelled. A full refund of ${c.totalPrice} ${c.currency} for booking ${c.bookingReference} is pending; you will be notified when it is processed.`,
         c.id as string,
       );
     }
     return { affected: affected.length };
+  }
+
+  /**
+   * PAY-03 hook for the payment module: records the Stripe refund of a cancelled booking
+   * and tells the user once it is REFUNDED or FAILED. Review B3, Joumana Hozayen.
+   */
+  async recordRefund(
+    bookingId: string,
+    refundId: string,
+    refundStatus: RefundStatus,
+  ) {
+    if (!isValidObjectId(bookingId))
+      throw new NotFoundException('Cancelled booking not found');
+    const b = await this.bookingModel.findOneAndUpdate(
+      { _id: bookingId, status: FlightBookingStatus.CANCELLED },
+      { $set: { refundId, refundStatus } },
+      { new: true },
+    );
+    if (!b) throw new NotFoundException('Cancelled booking not found');
+    if (refundStatus !== RefundStatus.PENDING)
+      await this.notify(
+        b.userId,
+        NotificationType.RefundUpdate,
+        refundStatus === RefundStatus.REFUNDED
+          ? 'Refund processed'
+          : 'Refund failed',
+        refundStatus === RefundStatus.REFUNDED
+          ? `Your refund of ${b.refundAmount} ${b.currency} for booking ${b.bookingReference} was processed.`
+          : `The refund for booking ${b.bookingReference} failed. Please contact support.`,
+        b.id as string,
+      );
+    return b;
   }
 
   // ---------------------------------------------------------------------------

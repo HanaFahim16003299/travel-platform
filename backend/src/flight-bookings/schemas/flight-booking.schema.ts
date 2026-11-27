@@ -1,7 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { HydratedDocument } from 'mongoose';
-import { FlightBookingStatus, PassengerType } from '../flight-booking.enums.js';
+import {
+  FlightBookingStatus,
+  PassengerType,
+  RefundStatus,
+} from '../flight-booking.enums.js';
 
 @Schema({ _id: false })
 export class CancellationTier {
@@ -118,6 +122,8 @@ export class FlightBooking {
   @Prop() cancelledAt?: Date;
   @Prop() refundAmount?: number;
   @Prop() refundId?: string;
+  // PAY-03: PENDING until the payment module confirms the Stripe refund (review B3, Joumana Hozayen).
+  @Prop({ type: String, enum: RefundStatus }) refundStatus?: RefundStatus;
 
   @Prop({ type: [PendingSeatReleaseSchema], default: [] })
   pendingSeatReleases: PendingSeatRelease[];

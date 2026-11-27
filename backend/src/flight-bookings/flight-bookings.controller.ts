@@ -106,7 +106,7 @@ export class FlightBookingsController {
   @Auth(Role.User, Role.Admin, Role.AirlineModerator)
   @ApiOperation({
     summary:
-      "FLT-25 / ACC-11: booking details (owner, admin, or that airline's moderator)",
+      "FLT-25 / ACC-11: booking details (owner, admin, or that airline's moderator). After a cancellation it includes refundAmount, refundStatus (PENDING, REFUNDED, FAILED) and refundId.",
   })
   @ApiNotFoundResponse({ description: 'Booking not found' })
   findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
@@ -118,7 +118,7 @@ export class FlightBookingsController {
   @Auth(Role.User)
   @ApiOperation({
     summary:
-      'FLT-26: cancel a confirmed booking before departure (tier-based refund)',
+      'FLT-26 / PAY-03: cancel a confirmed booking before departure. The tier-based refund is recorded with refundStatus PENDING until the payment module confirms it.',
   })
   @ApiConflictResponse({ description: 'Not confirmed, or already departed' })
   cancel(@CurrentUser() user: AuthUser, @Param('id') id: string) {

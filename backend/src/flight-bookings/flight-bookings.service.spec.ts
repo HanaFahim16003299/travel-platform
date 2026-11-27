@@ -2,7 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { FlightBookingsService } from './flight-bookings.service.js';
-import { FlightBookingStatus, PassengerType } from './flight-booking.enums.js';
+import {
+  FlightBookingStatus,
+  PassengerType,
+  RefundStatus,
+} from './flight-booking.enums.js';
 
 type Mock = ReturnType<typeof vi.fn>;
 
@@ -362,6 +366,91 @@ describe('FlightBookingsService', () => {
 
       const acceptedAt = h.seatHolds.holdDraft.mock.calls[0][2];
       expect(acceptedAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe('refund tracking (PAY-03, review B3)', () => {
+    it('marks the refund PENDING and does not promise a refunded amount yet', async () => {
+      const b = bookingDoc();
+      h.bookingModel.findById.mockResolvedValue(b);
+      h.seatHolds.cancelConfirmed.mockResolvedValue({
+        ...b,
+        status: FlightBookingStatus.CANCELLED,
+      });
+
+      const result = await h.service.cancel(owner, b._id.toString());
+
+      expect(h.seatHolds.cancelConfirmed).toHaveBeenCalledWith(b, {
+        refundAmount: 400,
+        refundStatus: RefundStatus.PENDING,
+      });
+      const message: string = h.notifications.create.mock.calls[0][0].message;
+      expect(message).toContain('is pending');
+      expect(message).not.toContain('Refund:');
+      expect(result.refundAmount).toBe(400);
+    });
+
+    it('sets no refund status when nothing is refunded', async () => {
+      const b = bookingDoc();
+      b.segments[0].refundable = false;
+      h.bookingModel.findById.mockResolvedValue(b);
+      h.seatHolds.cancelConfirmed.mockResolvedValue({
+        ...b,
+        status: FlightBookingStatus.CANCELLED,
+      });
+
+      await h.service.cancel(owner, b._id.toString());
+
+      expect(h.seatHolds.cancelConfirmed).toHaveBeenCalledWith(b, {
+        refundAmount: 0,
+      });
+      expect(h.notifications.create.mock.calls[0][0].message).toContain(
+        'No refund applies',
+      );
+    });
+
+    it('records the refund reported by the payment module and tells the user', async () => {
+      const b = bookingDoc({
+        status: FlightBookingStatus.CANCELLED,
+        refundAmount: 400,
+      });
+      h.bookingModel.findOneAndUpdate.mockResolvedValue(b);
+
+      await h.service.recordRefund(
+        b._id.toString(),
+        're_1',
+        RefundStatus.REFUNDED,
+      );
+
+      expect(h.bookingModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: b._id.toString(), status: FlightBookingStatus.CANCELLED },
+        { $set: { refundId: 're_1', refundStatus: RefundStatus.REFUNDED } },
+        { new: true },
+      );
+      expect(h.notifications.create.mock.calls[0][0].message).toContain(
+        'was processed',
+      );
+    });
+
+    it('marks refunds of an airline-cancelled flight PENDING', async () => {
+      const confirmed = bookingDoc();
+      h.bookingModel.find.mockResolvedValue([confirmed]);
+      h.seatHolds.cancelConfirmed.mockResolvedValue({
+        ...confirmed,
+        status: FlightBookingStatus.CANCELLED,
+      });
+
+      await h.service.cancelAllForFlight(
+        String(confirmed.segments[0].flightId),
+      );
+
+      expect(h.seatHolds.cancelConfirmed).toHaveBeenCalledWith(confirmed, {
+        refundAmount: 400,
+        refundStatus: RefundStatus.PENDING,
+      });
+      expect(h.notifications.create.mock.calls[0][0].message).toContain(
+        'is pending',
+      );
     });
   });
 });
