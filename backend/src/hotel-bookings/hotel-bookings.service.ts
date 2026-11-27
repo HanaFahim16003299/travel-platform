@@ -1,12 +1,20 @@
 import { randomBytes } from 'node:crypto';
-
 import {
   Injectable,
   BadRequestException,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
   InternalServerErrorException,
+  OnModuleInit,
+  Optional,
 } from '@nestjs/common';
+import { BookingGatewayRegistry } from '../payments/booking-gateway.registry.js';
+import { BookingType, RefundStatus } from '../payments/enums/payment.enums.js';
+import { PaymentsService } from '../payments/payments.service.js';
+import { RefundsService } from '../payments/refunds.service.js';
+import type { AuthUser } from '../auth/decorators.js';
+import { Role } from '../common/enums/index.js';
 
 import {
   InjectModel,
@@ -14,6 +22,7 @@ import {
 } from '@nestjs/mongoose';
 
 import type { Model, Connection, ClientSession } from 'mongoose';
+import { Types } from 'mongoose';
 
 import {
   HotelBooking,
@@ -52,7 +61,7 @@ const REFERENCE_LENGTH = 6;
 const MAX_REFERENCE_ATTEMPTS = 5;
 
 @Injectable()
-export class HotelBookingsService {
+export class HotelBookingsService implements OnModuleInit {
   // Placeholder until confirmed against Excel requirements
   private readonly holdDurationMinutes = 15;
 
@@ -72,7 +81,30 @@ export class HotelBookingsService {
 
     @InjectConnection()
     private readonly connection: Connection,
+
+    @Optional() private readonly paymentsService?: PaymentsService,
+    @Optional() private readonly refundsService?: RefundsService,
+    @Optional() private readonly gatewayRegistry?: BookingGatewayRegistry,
   ) {}
+
+  onModuleInit() {
+    this.gatewayRegistry?.register(BookingType.Hotel, {
+      getPolicies: (user, id) => this.getPolicies(user, id),
+      acceptPolicies: (user, id) => this.acceptPolicies(user, id),
+      getPayableBooking: (id) => this.getPayableBooking(id),
+      confirmAfterPayment: async (id, paymentId) => {
+        try {
+          await this.confirmBooking(id, paymentId);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      expireIfDue: async (id) => {
+        await this.expireBooking(id);
+      },
+    });
+  }
 
   // ==========================================
   // HTL-16, HTL-18: CREATE HOTEL BOOKING
@@ -398,9 +430,21 @@ export class HotelBookingsService {
     );
 
     const session = await this.connection.startSession();
+    let result: {
+      message: string;
+      booking: HotelBookingDocument;
+      refund: {
+        required: boolean;
+        amount: number;
+        percent: number;
+        currency: string;
+        status: string;
+        refundId?: string | null;
+      };
+    };
 
     try {
-      return await session.withTransaction(async () => {
+      result = await session.withTransaction(async () => {
         // Find booking and verify ownership
         const booking = await this.bookingModel
           .findOne({
@@ -525,12 +569,46 @@ export class HotelBookingsService {
             percent: refundPercent,
             currency: booking.currency,
             status: booking.refundStatus,
+            refundId: null as string | null,
           },
         };
       });
     } finally {
       await session.endSession();
     }
+
+    if (
+      result.refund.required &&
+      result.message === 'Booking cancelled successfully' &&
+      this.refundsService
+    ) {
+      const refundDoc = await this.refundsService.processRefundForBooking({
+        bookingType: BookingType.Hotel,
+        bookingId: String(result.booking._id),
+        userId: String(result.booking.userId),
+        amount: result.refund.amount,
+        currency: result.refund.currency,
+        reason: `Hotel cancellation policy (${result.refund.percent}% refund)`,
+      });
+
+      if (refundDoc) {
+        const nextStatus =
+          refundDoc.status === RefundStatus.Succeeded
+            ? 'Refunded'
+            : refundDoc.status === RefundStatus.Failed
+              ? 'Failed'
+              : 'Pending';
+        await this.bookingModel.updateOne(
+          { _id: result.booking._id },
+          { $set: { refundStatus: nextStatus } },
+        );
+        result.booking.refundStatus = nextStatus;
+        result.refund.status = nextStatus;
+        result.refund.refundId = String(refundDoc._id);
+      }
+    }
+
+    return result;
   }
 
   // ==========================================
@@ -538,7 +616,7 @@ export class HotelBookingsService {
   // Only called by trusted payment service
   // ==========================================
 
-  async confirmBooking(bookingId: string) {
+  async confirmBooking(bookingId: string, paymentId?: string) {
     const bookingObjectId = this.validateId(
       bookingId,
       'booking',
@@ -623,6 +701,9 @@ export class HotelBookingsService {
         // Added by Mohamed Hesham: HTL-17 booking reference.
         booking.bookingReference =
           await this.generateUniqueReference(session);
+        if (paymentId && Types.ObjectId.isValid(paymentId)) {
+          booking.paymentId = new Types.ObjectId(paymentId);
+        }
 
         return await booking.save({ session });
       });
@@ -642,9 +723,10 @@ export class HotelBookingsService {
     );
 
     const session = await this.connection.startSession();
+    let expiredBooking: HotelBookingDocument;
 
     try {
-      return await session.withTransaction(async () => {
+      expiredBooking = await session.withTransaction(async () => {
         const booking = await this.bookingModel
           .findById(bookingObjectId)
           .session(session);
@@ -702,6 +784,118 @@ export class HotelBookingsService {
     } finally {
       await session.endSession();
     }
+
+    await this.paymentsService?.cancelPendingPaymentForBooking(
+      BookingType.Hotel,
+      bookingId,
+    );
+
+    return expiredBooking;
+  }
+
+  // ==========================================
+  // INTERNAL: POLICY DISPLAY & ACCEPTANCE (PAY-02)
+  // ==========================================
+
+  async getPolicies(user: AuthUser, bookingId: string) {
+    const bookingObjectId = this.validateId(bookingId, 'booking');
+    const booking = await this.bookingModel.findById(bookingObjectId).lean();
+    if (!booking) {
+      throw new NotFoundException('Booking not found');
+    }
+    if (String(booking.userId) !== user.id && user.role !== Role.Admin) {
+      throw new ForbiddenException('You do not have access to this booking');
+    }
+    const hotel = await this.hotelModel
+      .findById(booking.hotelId)
+      .select('name checkInTime checkOutTime')
+      .lean();
+    return {
+      bookingType: 'hotel',
+      bookingId: String(booking._id),
+      status: booking.status,
+      totalPrice: booking.totalPrice,
+      currency: booking.currency,
+      policyAcceptedAt: booking.policyAcceptedAt ?? null,
+      checkInTime: hotel?.checkInTime ?? null,
+      checkOutTime: hotel?.checkOutTime ?? null,
+      policies: booking.policies,
+    };
+  }
+
+  async acceptPolicies(user: AuthUser, bookingId: string) {
+    const bookingObjectId = this.validateId(bookingId, 'booking');
+    const booking = await this.bookingModel.findById(bookingObjectId);
+    if (!booking) {
+      throw new NotFoundException('Booking not found');
+    }
+    if (String(booking.userId) !== user.id) {
+      throw new ForbiddenException('You do not have access to this booking');
+    }
+    if (booking.status !== BookingStatus.PendingPayment) {
+      throw new ConflictException('Only pending bookings can accept policies');
+    }
+    if (!booking.expiresAt || booking.expiresAt.getTime() <= Date.now()) {
+      throw new ConflictException('Booking payment deadline has expired');
+    }
+    if (!booking.policyAcceptedAt) {
+      booking.policyAcceptedAt = new Date();
+      await booking.save();
+    }
+    return {
+      bookingType: 'hotel',
+      bookingId: String(booking._id),
+      accepted: true,
+      policyAcceptedAt: booking.policyAcceptedAt,
+    };
+  }
+
+  async getPayableBooking(bookingId: string) {
+    const bookingObjectId = this.validateId(bookingId, 'booking');
+    const booking = await this.bookingModel.findById(bookingObjectId).lean();
+    if (!booking) {
+      throw new NotFoundException('Booking not found');
+    }
+    if (
+      booking.status !== BookingStatus.PendingPayment ||
+      !booking.expiresAt ||
+      booking.expiresAt.getTime() <= Date.now()
+    ) {
+      throw new ConflictException('Booking is not awaiting payment or the hold has expired');
+    }
+    return {
+      id: String(booking._id),
+      userId: String(booking.userId),
+      amount: booking.totalPrice,
+      currency: booking.currency,
+      holdExpiresAt: booking.expiresAt,
+      policyAcceptedAt: booking.policyAcceptedAt ?? null,
+    };
+  }
+
+  // ==========================================
+  // HELPER: UNIQUE BOOKING REFERENCE (HTL-17), added by Mohamed Hesham
+  // ==========================================
+
+  private async generateUniqueReference(
+    session: ClientSession,
+  ): Promise<string> {
+    for (let attempt = 0; attempt < MAX_REFERENCE_ATTEMPTS; attempt++) {
+      const reference = Array.from(
+        randomBytes(REFERENCE_LENGTH),
+        (byte) => REFERENCE_ALPHABET[byte % REFERENCE_ALPHABET.length],
+      ).join('');
+
+      const taken = await this.bookingModel
+        .exists({ bookingReference: reference })
+        .session(session);
+
+      if (!taken) return reference;
+    }
+
+    throw new InternalServerErrorException(
+      'Could not generate a booking reference',
+    );
   }
 
   // ==========================================
@@ -805,30 +999,5 @@ export class HotelBookingsService {
     }
 
     return date;
-  }
-
-  // ==========================================
-  // HELPER: UNIQUE BOOKING REFERENCE (HTL-17), added by Mohamed Hesham
-  // ==========================================
-
-  private async generateUniqueReference(
-    session: ClientSession,
-  ): Promise<string> {
-    for (let attempt = 0; attempt < MAX_REFERENCE_ATTEMPTS; attempt++) {
-      const reference = Array.from(
-        randomBytes(REFERENCE_LENGTH),
-        (byte) => REFERENCE_ALPHABET[byte % REFERENCE_ALPHABET.length],
-      ).join('');
-
-      const taken = await this.bookingModel
-        .exists({ bookingReference: reference })
-        .session(session);
-
-      if (!taken) return reference;
-    }
-
-    throw new InternalServerErrorException(
-      'Could not generate a booking reference',
-    );
   }
 }

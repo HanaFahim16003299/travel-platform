@@ -85,6 +85,7 @@ export class FlightBooking {
   @Prop({ required: true }) currency: string;
 
   @Prop({ unique: true, sparse: true }) bookingReference?: string;
+  @Prop() policyAcceptedAt?: Date;
   @Prop() paymentId?: string;
   @Prop() confirmedAt?: Date;
   @Prop() cancelledAt?: Date;

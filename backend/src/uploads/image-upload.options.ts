@@ -8,7 +8,7 @@ const EXTENSIONS: Record<string, string> = {
   'image/png': '.png',
 };
 
-// GEN-08: 5 MB per image. Changed by Mohamed Hesham.
+// GEN-08: JPG and PNG only, at most 5 MB per image.
 export const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
 export function uploadDir(): string {
@@ -33,10 +33,7 @@ export function imageUploadOptions() {
       cb: (error: Error | null, acceptFile: boolean) => void,
     ) => {
       if (!(file.mimetype in EXTENSIONS)) {
-        return cb(
-          new BadRequestException('Only JPEG and PNG images are allowed'),
-          false,
-        );
+        return cb(new BadRequestException('Only JPEG and PNG images are allowed'), false);
       }
       cb(null, true);
     },

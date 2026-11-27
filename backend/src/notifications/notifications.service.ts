@@ -56,6 +56,10 @@ export class NotificationsService {
     return { data, meta: buildMeta(total, page, limit) };
   }
 
+  unreadCount(userId: string) {
+    return this.model.countDocuments({ user: new Types.ObjectId(userId), read: false });
+  }
+
   async markRead(userId: string, id: string) {
     const found = await this.model.findOneAndUpdate(
       { _id: id, user: new Types.ObjectId(userId) },
