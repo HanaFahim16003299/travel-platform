@@ -37,6 +37,11 @@ function makeHarness() {
     Mock
   >;
   const flightCancellations = { register: vi.fn() } as Record<string, Mock>;
+  // Payments module (merged): no Stripe payment found by default.
+  const refundsService = {
+    processRefundForBooking: vi.fn().mockResolvedValue(null),
+  } as Record<string, Mock>;
+  const gatewayRegistry = { register: vi.fn() } as Record<string, Mock>;
   const service = new FlightBookingsService(
     bookingModel as never,
     flightModel as never,
@@ -44,9 +49,13 @@ function makeHarness() {
     seatHolds as never,
     notifications as never,
     flightCancellations as never,
+    refundsService as never,
+    gatewayRegistry as never,
   );
   return {
     flightCancellations,
+    refundsService,
+    gatewayRegistry,
     service,
     bookingModel,
     flightModel,
@@ -423,27 +432,72 @@ describe('FlightBookingsService', () => {
       );
     });
 
-    it('records the refund reported by the payment module and tells the user', async () => {
-      const b = bookingDoc({
-        status: FlightBookingStatus.CANCELLED,
-        refundAmount: 400,
+    it('asks the payments module for the Stripe refund and stores REFUNDED', async () => {
+      const b = bookingDoc();
+      const cancelled = { ...b, status: FlightBookingStatus.CANCELLED };
+      h.bookingModel.findById.mockResolvedValue(b);
+      h.seatHolds.cancelConfirmed.mockResolvedValue(cancelled);
+      h.refundsService.processRefundForBooking.mockResolvedValue({
+        _id: 'refund-1',
+        status: 'Succeeded',
       });
-      h.bookingModel.findOneAndUpdate.mockResolvedValue(b);
 
-      await h.service.recordRefund(
-        b._id.toString(),
-        're_1',
-        RefundStatus.REFUNDED,
+      const result = await h.service.cancel(owner, b._id.toString());
+
+      expect(h.refundsService.processRefundForBooking).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bookingType: 'flight',
+          amount: 400,
+          currency: 'USD',
+        }),
+      );
+      expect(h.bookingModel.updateOne).toHaveBeenCalledWith(
+        { _id: b._id },
+        { $set: { refundId: 'refund-1', refundStatus: RefundStatus.REFUNDED } },
+      );
+      expect(result.booking).toMatchObject({
+        refundStatus: RefundStatus.REFUNDED,
+      });
+    });
+
+    it('stores FAILED when Stripe refuses the refund', async () => {
+      const b = bookingDoc();
+      h.bookingModel.findById.mockResolvedValue(b);
+      h.seatHolds.cancelConfirmed.mockResolvedValue({
+        ...b,
+        status: FlightBookingStatus.CANCELLED,
+      });
+      h.refundsService.processRefundForBooking.mockResolvedValue({
+        _id: 'refund-2',
+        status: 'Failed',
+      });
+
+      await h.service.cancel(owner, b._id.toString());
+
+      expect(h.bookingModel.updateOne).toHaveBeenCalledWith(
+        { _id: b._id },
+        { $set: { refundId: 'refund-2', refundStatus: RefundStatus.FAILED } },
+      );
+    });
+
+    it('keeps the cancellation and the PENDING status when the refund cannot be created', async () => {
+      const b = bookingDoc();
+      h.bookingModel.findById.mockResolvedValue(b);
+      h.seatHolds.cancelConfirmed.mockResolvedValue({
+        ...b,
+        status: FlightBookingStatus.CANCELLED,
+        refundStatus: RefundStatus.PENDING,
+      });
+      h.refundsService.processRefundForBooking.mockRejectedValue(
+        new Error('stripe down'),
       );
 
-      expect(h.bookingModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: b._id.toString(), status: FlightBookingStatus.CANCELLED },
-        { $set: { refundId: 're_1', refundStatus: RefundStatus.REFUNDED } },
-        { new: true },
-      );
-      expect(h.notifications.create.mock.calls[0][0].message).toContain(
-        'was processed',
-      );
+      const result = await h.service.cancel(owner, b._id.toString());
+
+      expect(result.booking).toMatchObject({
+        refundStatus: RefundStatus.PENDING,
+      });
+      expect(h.bookingModel.updateOne).not.toHaveBeenCalled();
     });
 
     it('marks refunds of an airline-cancelled flight PENDING', async () => {
@@ -688,6 +742,34 @@ describe('FlightBookingsService', () => {
         h.service.cancel(owner, new Types.ObjectId().toString()),
       ).rejects.toThrow('Booking is no longer confirmed');
       expect(h.notifications.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('payments gateway (PAY-01, PAY-02)', () => {
+    it('registers the flight booking gateway with the payments module', async () => {
+      const b = bookingDoc({
+        status: FlightBookingStatus.CONFIRMED,
+        paymentId: 'pi_1',
+      });
+      h.bookingModel.findById.mockResolvedValue(b);
+
+      h.service.onModuleInit();
+
+      const [type, gateway] = h.gatewayRegistry.register.mock.calls[0];
+      expect(type).toBe('flight');
+      // confirmAfterPayment is reported as a boolean: true = keep the payment.
+      expect(await gateway.confirmAfterPayment(b._id.toString(), 'pi_1')).toBe(
+        true,
+      );
+      expect(
+        await gateway.confirmAfterPayment(b._id.toString(), 'pi_other'),
+      ).toBe(false);
+    });
+
+    it('expireIfDue expires through the seat-hold service', async () => {
+      const id = new Types.ObjectId();
+      await h.service.expireIfDue(id.toString());
+      expect(h.seatHolds.expireOne).toHaveBeenCalledWith(id, false);
     });
   });
 });

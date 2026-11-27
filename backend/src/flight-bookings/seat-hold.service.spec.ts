@@ -255,6 +255,28 @@ describe('SeatHoldService', () => {
         { $inc: { 'cabins.$.availableSeats': 2 } },
       );
     });
+
+    it('cancels the unpaid Stripe payment of an expired hold (PAY-01)', async () => {
+      const payments = {
+        cancelPendingPaymentForBooking: vi.fn().mockResolvedValue(undefined),
+      };
+      service = new SeatHoldService(
+        bookingModel as never,
+        flightModel as never,
+        flightsService as never,
+        payments as never,
+      );
+      extra = { segments: [leg()], seatCount: 1 };
+      stubUpdates(() => ({ status: FlightBookingStatus.EXPIRED }));
+      const id = new Types.ObjectId();
+
+      await service.expireOne(id);
+
+      expect(payments.cancelPendingPaymentForBooking).toHaveBeenCalledWith(
+        'flight',
+        String(id),
+      );
+    });
   });
 
   it('seatReleasesFor builds one release per leg', () => {
