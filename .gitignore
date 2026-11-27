@@ -150,6 +150,6 @@ vite.config.ts.timestamp-*
 .env
 .env.*
 !.env.example
-uploads/*
-!uploads/.gitkeep
+**/uploads/*
+!**/uploads/.gitkeep
 .DS_Store
