@@ -225,7 +225,10 @@ refund status (B3), strict date of birth (C1), per-leg passenger checks and
 duplicate passports (C2), reduced views for admins/moderators (C3), draft and
 hold limits with a price re-check (C4), hold-minutes validation (C5), page size
 10 (C6), Departed flight status (C7), typed Airport model (D2) and extra tests
-(A7). tsc, the full Vitest suite, nest build and prettier --check on the touched
-files passed in Claude's environment, and each fix was broken on purpose to see
-a test fail. I reviewed the commits before applying them.
-dev-confirm (A6) is still there until payments are merged.
+(A7). When the payments module was merged into develop, Claude merged develop
+into the branch, moved the payments calls into the new structure, connected the
+refund status to the real Stripe refunds, removed dev-confirm (A6), and fixed
+admin.module.ts, which develop had left with conflict markers. tsc, the full
+Vitest suite, nest build and prettier --check on the touched files passed in
+Claude's environment, and each fix was broken on purpose to see a test fail.
+I reviewed the commits before applying them.
