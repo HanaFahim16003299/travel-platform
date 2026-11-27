@@ -10,7 +10,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User } from '../users/schemas/user.schema.js';
 
-const MAX_AGE_MS = Number(process.env.JWT_EXPIRES_MINUTES ?? 60) * 60 * 1000;
+const MAX_AGE_MS = Number(process.env.JWT_EXPIRES_MINUTES ?? 30) * 60 * 1000;
 const cookieOpts = () => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
