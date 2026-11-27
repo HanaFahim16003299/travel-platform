@@ -22,6 +22,7 @@ function makeHarness() {
     countDocuments: vi.fn().mockResolvedValue(0),
     exists: vi.fn(),
     updateMany: vi.fn(),
+    updateOne: vi.fn().mockResolvedValue({}),
   } as Record<string, Mock>;
   const flightModel = { findById: vi.fn() } as Record<string, Mock>;
   const airlineModel = { findById: vi.fn() } as Record<string, Mock>;
@@ -97,6 +98,9 @@ function bookingDoc(over: Record<string, unknown> = {}) {
 
 const owner = { id: USER_ID, email: 'u@test.com', role: 'user' } as never;
 
+/** The flight object most recently stubbed, so a test can change it afterwards. */
+let lastStubbedFlight: { cabins: { price: number }[] };
+
 const lean = (value: unknown) => ({ lean: vi.fn().mockResolvedValue(value) });
 
 /** Stubs one bookable flight + airline; returns the ids to put in the request. */
@@ -129,6 +133,7 @@ function stubFlight(
     ],
     ...flightOver,
   };
+  lastStubbedFlight = flight;
   h.flightModel.findById.mockReturnValue(lean(flight));
   h.airlineModel.findById.mockReturnValue(
     lean({ _id: airlineId, isActive: true, ...airline }),
@@ -146,6 +151,24 @@ const adultDto = (over: Record<string, unknown> = {}) => ({
   phone: '0100',
   ...over,
 });
+
+/** A real draft made by createDraft against the stubbed flight, so hold() sees no price change. */
+async function makeDraft(
+  h: ReturnType<typeof makeHarness>,
+  airline: Record<string, unknown> = {},
+  passengerOver: Record<string, unknown> = {},
+) {
+  const ids = stubFlight(h, airline);
+  h.bookingModel.create.mockImplementation((doc) =>
+    Promise.resolve({ _id: new Types.ObjectId(), ...doc }),
+  );
+  const draft = await h.service.createDraft(owner, {
+    outbound: ids,
+    passengers: [adultDto(passengerOver)],
+  } as never);
+  h.bookingModel.countDocuments.mockResolvedValue(0);
+  return draft as unknown as ReturnType<typeof bookingDoc>;
+}
 
 describe('FlightBookingsService', () => {
   let h: ReturnType<typeof makeHarness>;
@@ -347,16 +370,7 @@ describe('FlightBookingsService', () => {
     });
 
     it('stores the acceptance time when holding', async () => {
-      const ids = stubFlight(h);
-      const draft = bookingDoc({
-        status: FlightBookingStatus.DRAFT,
-        segments: [
-          {
-            flightId: new Types.ObjectId(ids.flightId),
-            cabinId: new Types.ObjectId(ids.cabinId),
-          },
-        ],
-      });
+      const draft = await makeDraft(h);
       h.bookingModel.findOne.mockResolvedValue(draft);
       h.seatHolds.holdDraft.mockResolvedValue({
         status: FlightBookingStatus.PENDING_PAYMENT,
@@ -560,6 +574,63 @@ describe('FlightBookingsService', () => {
         'Booking not found',
       );
       expect(h.bookingModel.findById).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('seat hoarding and stale prices (review C4)', () => {
+    it('refuses a sixth unfinished draft with 429', async () => {
+      const ids = stubFlight(h);
+      h.bookingModel.countDocuments.mockResolvedValue(5);
+
+      await expect(
+        h.service.createDraft(owner, {
+          outbound: ids,
+          passengers: [adultDto()],
+        } as never),
+      ).rejects.toMatchObject({ status: 429 });
+      expect(h.bookingModel.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a third active hold with 429', async () => {
+      const draft = await makeDraft(h);
+      h.bookingModel.findOne.mockResolvedValue(draft);
+      h.bookingModel.countDocuments.mockResolvedValue(2);
+
+      await expect(
+        h.service.hold(owner, String(draft._id), true),
+      ).rejects.toMatchObject({ status: 429 });
+      expect(h.seatHolds.holdDraft).not.toHaveBeenCalled();
+    });
+
+    it('holds when the price and policies are unchanged', async () => {
+      const draft = await makeDraft(h, {
+        baggagePolicy: { extraBagPrice: 30, maxExtraBags: 1 },
+      });
+      h.bookingModel.findOne.mockResolvedValue(draft);
+      h.seatHolds.holdDraft.mockResolvedValue({
+        status: FlightBookingStatus.PENDING_PAYMENT,
+      });
+
+      await h.service.hold(owner, String(draft._id), true);
+
+      expect(h.seatHolds.holdDraft).toHaveBeenCalled();
+      expect(h.bookingModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('updates the draft and refuses the hold when the price changed', async () => {
+      const draft = await makeDraft(h);
+      h.bookingModel.findOne.mockResolvedValue(draft);
+      // The airline raised the cabin price from 200 to 260 after the summary.
+      lastStubbedFlight.cabins[0].price = 260;
+
+      await expect(
+        h.service.hold(owner, String(draft._id), true),
+      ).rejects.toThrow('The price or airline policies changed');
+      expect(h.seatHolds.holdDraft).not.toHaveBeenCalled();
+      expect(h.bookingModel.updateOne).toHaveBeenCalledWith(
+        { _id: draft._id, status: FlightBookingStatus.DRAFT },
+        { $set: expect.objectContaining({ totalPrice: 260 }) },
+      );
     });
   });
 });

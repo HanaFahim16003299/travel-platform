@@ -14,6 +14,7 @@ import {
   ApiConflictResponse,
   ApiNotFoundResponse,
   ApiOperation,
+  ApiResponse,
   ApiProduces,
   ApiTags,
 } from '@nestjs/swagger';
@@ -46,6 +47,10 @@ export class FlightBookingsController {
   @ApiConflictResponse({
     description: 'Flight not bookable or not enough seats',
   })
+  @ApiResponse({
+    status: 429,
+    description: 'You already have 5 unfinished (draft) bookings',
+  })
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateFlightBookingDto) {
     return this.service.createDraft(user, dto);
   }
@@ -57,7 +62,14 @@ export class FlightBookingsController {
       'FLT-22 / PAY-02: accept the airline policies and hold the seats for 10 minutes (status becomes PENDING_PAYMENT)',
   })
   @ApiBadRequestResponse({ description: 'Policies not accepted' })
-  @ApiConflictResponse({ description: 'Not enough seats, or already on hold' })
+  @ApiConflictResponse({
+    description:
+      'Not enough seats, already on hold, or the price/policies changed since the summary (the draft is updated; review it and hold again)',
+  })
+  @ApiResponse({
+    status: 429,
+    description: 'You already hold seats for 2 unpaid bookings',
+  })
   @ApiNotFoundResponse({ description: 'Draft not found' })
   hold(@CurrentUser() user: AuthUser, @Body() dto: HoldFlightBookingDto) {
     return this.service.hold(user, dto.bookingId, dto.acceptPolicies);

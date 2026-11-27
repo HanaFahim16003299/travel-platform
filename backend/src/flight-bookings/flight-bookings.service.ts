@@ -4,6 +4,8 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  HttpException,
+  HttpStatus,
   Logger,
   NotFoundException,
   OnModuleInit,
@@ -35,11 +37,16 @@ import {
   validatePassengers,
 } from './domain/passenger-rules.js';
 import { calculatePrice } from './domain/pricing.js';
+import { legsChanged } from './domain/leg-snapshot.js';
 import { computeRefund } from './domain/refund-rules.js';
 import { generateBookingReference } from './domain/booking-reference.js';
 import { toRestrictedBookingView } from './domain/booking-views.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Review C4: limits that stop one user hoarding seats or piling up drafts. Joumana Hozayen. */
+export const MAX_OPEN_DRAFTS_PER_USER = 5;
+export const MAX_ACTIVE_HOLDS_PER_USER = 2;
 
 /** Plain copy of a Mongoose subdocument (or of an already-plain object). */
 function toPlain<T extends object>(doc: T): T {
@@ -169,6 +176,15 @@ export class FlightBookingsService implements OnModuleInit {
   // ---------------------------------------------------------------------------
 
   async createDraft(user: AuthUser, dto: CreateFlightBookingDto) {
+    const openDrafts = await this.bookingModel.countDocuments({
+      userId: new Types.ObjectId(user.id),
+      status: FlightBookingStatus.DRAFT,
+    });
+    if (openDrafts >= MAX_OPEN_DRAFTS_PER_USER)
+      throw new HttpException(
+        `You already have ${MAX_OPEN_DRAFTS_PER_USER} unfinished bookings. Hold or let one expire before starting another.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     const out = await this.loadLeg(dto.outbound);
     const back = dto.inbound ? await this.loadLeg(dto.inbound) : null;
 
@@ -251,12 +267,46 @@ export class FlightBookingsService implements OnModuleInit {
     });
     if (!draft) throw new NotFoundException('Draft booking not found');
 
+    const activeHolds = await this.bookingModel.countDocuments({
+      userId: new Types.ObjectId(user.id),
+      status: FlightBookingStatus.PENDING_PAYMENT,
+      holdExpiresAt: { $gt: new Date() },
+    });
+    if (activeHolds >= MAX_ACTIVE_HOLDS_PER_USER)
+      throw new HttpException(
+        `You already hold seats for ${MAX_ACTIVE_HOLDS_PER_USER} bookings. Pay for one or let a hold expire first.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+
     // The flight may have been cancelled, or the airline deactivated, since the draft
+    const current = [];
     for (const s of draft.segments)
-      await this.loadLeg({
-        flightId: String(s.flightId),
-        cabinId: String(s.cabinId),
-      });
+      current.push(
+        await this.loadLeg({
+          flightId: String(s.flightId),
+          cabinId: String(s.cabinId),
+        }),
+      );
+
+    // Decision (review C4): a draft can be up to 24 hours old, so hold() re-checks the
+    // price and policies. If they changed, the user did not agree to them (FLT-21, PAY-02):
+    // the draft is updated with the new price and policies and the hold is refused, so
+    // the user reviews the new summary and holds again.
+    const segments = current.map((l) => l.segment);
+    if (legsChanged(draft.segments, segments)) {
+      await this.bookingModel.updateOne(
+        { _id: draft._id, status: FlightBookingStatus.DRAFT },
+        { $set: { segments, ...calculatePrice(segments, draft.passengers) } },
+      );
+      throw new ConflictException(
+        'The price or airline policies changed since your booking summary. Review the updated booking and hold again.',
+      );
+    }
+    const maxExtra = Math.min(...segments.map((s) => s.maxExtraBags));
+    if (draft.passengers.some((p) => p.extraBags > maxExtra))
+      throw new BadRequestException(
+        `Maximum ${maxExtra} extra bag(s) per passenger for this airline`,
+      );
 
     const minutes = Number(process.env.FLIGHT_HOLD_MINUTES ?? 10);
     return this.seatHolds.holdDraft(draft, minutes, new Date());
